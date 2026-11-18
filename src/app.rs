@@ -17,8 +17,17 @@ const UNKNOWN_WORD_MESSAGE: &str = "Not in word list";
 /// Message shown after the winning guess.
 const WON_MESSAGE: &str = "You won!";
 
-/// Message shown when the board filled up without a win.
-const LOST_MESSAGE: &str = "Game over";
+/// Opening of the message shown when the board filled up without a win; the
+/// revealed answer follows it.
+const LOST_MESSAGE_PREFIX: &str = "The word was";
+
+/// Invitation to start another game, appended to both end-state messages.
+const NEW_GAME_PROMPT: &str = "press n for a new game";
+
+/// The full winning message, including the next-game prompt.
+fn won_message() -> String {
+    format!("{WON_MESSAGE} {NEW_GAME_PROMPT}")
+}
 
 /// Application state (the model).
 #[derive(Debug)]
@@ -47,6 +56,16 @@ impl App {
     /// The game being played.
     pub fn game(&self) -> &Game {
         &self.game
+    }
+
+    /// Starts a fresh game with a newly drawn answer.
+    ///
+    /// The board, the typed word, and the message line are reset, so the app
+    /// looks exactly as it does right after startup.
+    pub fn new_game(&mut self) {
+        self.game = Game::new(words::random_answer());
+        self.typed.clear();
+        self.message = None;
     }
 
     /// The word currently being typed.
@@ -118,21 +137,30 @@ impl App {
             Ok(()) => {
                 self.message = match self.game.state() {
                     GameState::Playing => None,
-                    GameState::Won => Some(WON_MESSAGE.to_string()),
-                    GameState::Lost => Some(LOST_MESSAGE.to_string()),
+                    GameState::Won => Some(won_message()),
+                    GameState::Lost => Some(self.lost_message()),
                 };
             }
             // Unreachable: the checks above guarantee a playing game and a
             // five-letter valid word. Restore the buffer so no input is lost.
             Err(GameError::GameOver) => {
                 self.typed = word;
-                self.message = Some(LOST_MESSAGE.to_string());
+                self.message = Some(self.lost_message());
             }
             Err(GameError::InvalidGuess(_)) => {
                 self.typed = word;
                 self.message = Some(UNKNOWN_WORD_MESSAGE.to_string());
             }
         }
+    }
+
+    /// The message shown once the final guess failed, revealing the answer and
+    /// inviting another game.
+    fn lost_message(&self) -> String {
+        format!(
+            "{LOST_MESSAGE_PREFIX} {}; {NEW_GAME_PROMPT}",
+            self.game.answer().as_str().to_ascii_uppercase()
+        )
     }
 }
 
@@ -258,7 +286,8 @@ mod tests {
         assert_eq!(app.game().state(), GameState::Won);
         assert_eq!(app.game().rounds_played(), 1);
         assert_eq!(app.typed(), "");
-        assert_eq!(app.message(), Some(WON_MESSAGE));
+        assert_eq!(app.message(), Some(won_message().as_str()));
+        assert!(app.message().unwrap().contains(NEW_GAME_PROMPT));
     }
 
     #[test]
@@ -273,7 +302,72 @@ mod tests {
 
         assert_eq!(app.game().state(), GameState::Lost);
         assert_eq!(app.game().rounds_played(), MAX_ROUNDS);
-        assert_eq!(app.message(), Some(LOST_MESSAGE));
+    }
+
+    #[test]
+    fn losing_message_reveals_the_answer() {
+        let mut app = app_with("swamp");
+
+        for _ in 0..MAX_ROUNDS {
+            type_word(&mut app, "slate");
+            app.submit();
+        }
+
+        let message = app.message().expect("a loss leaves a message");
+        assert!(message.contains("SWAMP"), "message was {message:?}");
+        assert!(message.contains(NEW_GAME_PROMPT), "message was {message:?}");
+    }
+
+    #[test]
+    fn new_game_after_a_win_starts_fresh() {
+        let mut app = app_with("crane");
+        type_word(&mut app, "crane");
+        app.submit();
+        assert_eq!(app.game().state(), GameState::Won);
+
+        app.new_game();
+
+        assert_eq!(app.game().state(), GameState::Playing);
+        assert_eq!(app.game().rounds_played(), 0);
+        assert_eq!(app.typed(), "");
+        assert_eq!(app.message(), None);
+    }
+
+    #[test]
+    fn new_game_after_a_loss_starts_fresh() {
+        let mut app = app_with("crane");
+        for _ in 0..MAX_ROUNDS {
+            type_word(&mut app, "slate");
+            app.submit();
+        }
+        assert_eq!(app.game().state(), GameState::Lost);
+
+        app.new_game();
+
+        assert_eq!(app.game().state(), GameState::Playing);
+        assert_eq!(app.game().rounds_played(), 0);
+        assert_eq!(app.typed(), "");
+        assert_eq!(app.message(), None);
+    }
+
+    #[test]
+    fn new_game_draws_a_valid_playable_answer() {
+        let mut app = app_with("crane");
+        type_word(&mut app, "crane");
+        app.submit();
+        app.new_game();
+
+        let answer = app.game().answer().as_str().to_string();
+        assert!(
+            words::is_valid_guess(&answer),
+            "drawn answer {answer:?} is not a valid guess"
+        );
+
+        type_word(&mut app, &answer);
+        app.submit();
+
+        assert_eq!(app.game().state(), GameState::Won);
+        assert_eq!(app.game().rounds_played(), 1);
     }
 
     #[test]
@@ -289,6 +383,6 @@ mod tests {
 
         assert_eq!(app.typed(), "");
         assert_eq!(app.game().rounds_played(), 1);
-        assert_eq!(app.message(), Some(WON_MESSAGE));
+        assert_eq!(app.message(), Some(won_message().as_str()));
     }
 }

@@ -1,7 +1,5 @@
 mod app;
 mod event;
-// `Game::answer` stays unread until the loss reveal in issue #8.
-#[allow(dead_code)]
 mod game;
 mod ui;
 mod words;
