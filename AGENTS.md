@@ -6,6 +6,8 @@
 
 Issues and specs live as GitHub issues in `Jheickson/Wordle`, managed with the `gh` CLI (`gh issue create`, `gh issue view`, `gh issue list`). See `docs/agents/issue-tracker.md`.
 
+**Issue before code.** Every behavior change starts with a GitHub issue — new functionality, bug fixes, and refactors that restructure code (module splits, dependency swaps, architectural changes). Create it before the first code change, carrying the spec and acceptance criteria for a feature, the repro for a bug, or the target design for a refactor; reference `#<n>` in the work. Typos, formatting, and docs-only edits go straight in; if a trivial fix grows into any of the above, stop and file the issue first.
+
 **Complete issues through commit messages.** The commit that resolves an issue MUST carry a closing keyword in its body — `Closes #<n>` (`Fixes`/`Resolves` also work; GitHub closes the issue when the commit reaches `main`). Prefer this over `gh issue close` for any work that lands in a commit: the commit message is the record of completion. Post the validation/explanation with `gh issue comment <n>` (before the closing push, or on the auto-closed issue afterwards). Use manual `gh issue close` only when no commit can close the issue (e.g. it is resolved by an already-merged change or by documentation elsewhere), and state the reason in the comment.
 
 ### Triage labels
