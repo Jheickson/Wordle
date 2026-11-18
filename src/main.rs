@@ -1,5 +1,6 @@
 mod app;
 mod game;
+mod words;
 mod event;
 mod ui;
 
