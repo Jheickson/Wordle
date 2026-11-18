@@ -22,19 +22,19 @@ pub fn handle_events(app: &mut App) -> Result<bool> {
 /// Returns `true` when the key means "quit".
 fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     // Raw mode delivers Ctrl-C as a key event rather than SIGINT, so the
-    // quit must be handled here. `q` quits from every screen; plain `c`
+    // quit must be handled here. Ctrl-C quits from every screen; plain `c`
     // keeps its meaning of a typed letter below.
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         return true;
     }
-    if key.code == KeyCode::Char('q') {
-        return true;
-    }
+    // `q` quits on every screen except a game in progress, where it is a
+    // typed letter like any other.
 
     match app.screen() {
         Screen::Menu => match key.code {
             KeyCode::Up | KeyCode::Char('k') => app.select_previous_menu_entry(),
             KeyCode::Down | KeyCode::Char('j') => app.select_next_menu_entry(),
+            KeyCode::Char('q') => return true,
             KeyCode::Enter => return app.activate_menu_entry(),
             _ => {}
         },
@@ -45,6 +45,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
             match key.code {
                 KeyCode::Esc => app.open_menu(),
                 KeyCode::Char('n') | KeyCode::Enter if finished => app.new_game(),
+                KeyCode::Char('q') if finished => return true,
                 KeyCode::Char(letter) => app.input_letter(letter),
                 KeyCode::Backspace => app.backspace(),
                 KeyCode::Enter => app.submit(),
@@ -52,8 +53,10 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
             }
         }
         Screen::Credits | Screen::Repository => {
-            if matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
-                app.open_menu();
+            match key.code {
+                KeyCode::Char('q') => return true,
+                KeyCode::Esc | KeyCode::Enter => app.open_menu(),
+                _ => {}
             }
         }
     }
@@ -126,8 +129,25 @@ mod tests {
     }
 
     #[test]
-    fn q_asks_to_quit() {
+    fn q_asks_to_quit_from_the_menu() {
         let mut app = app();
+        app.open_menu();
+
+        assert!(handle_key(&mut app, key(KeyCode::Char('q'))));
+    }
+
+    #[test]
+    fn q_is_a_typed_letter_while_playing() {
+        let mut app = app();
+
+        assert!(!handle_key(&mut app, key(KeyCode::Char('q'))));
+        assert_eq!(app.typed(), "q");
+    }
+
+    #[test]
+    fn q_asks_to_quit_after_the_game_ended() {
+        let mut app = app();
+        win(&mut app);
 
         assert!(handle_key(&mut app, key(KeyCode::Char('q'))));
     }

@@ -17,7 +17,8 @@ if you see anything else.
 1. Run `cargo run`.
 2. Expect the alternate screen to open with a centered 6×5 board of dimmed
    placeholder squares (one square per remaining guess), an empty message line
-   above it, and `q to quit` in the bottom-right corner.
+   above it, and `Esc: menu` in the bottom-right corner (`q to quit` appears
+   there only once the game has ended).
 3. Expect no shell text or previous screen contents to show through, and no
    cursor blinking over the board (the app hides it while drawing).
 
@@ -80,7 +81,9 @@ guess `crane`. Revert the edit afterwards (`git checkout src/app.rs`).
 
 ## 8. Quit with `q`
 
-1. While playing, press `q`.
+1. Start a game, then press `q` while playing: expect the letter `q` in the
+   active row and the app still running. Finish or lose the game, then press
+   `q`: expect the app to quit.
 2. Expect the alternate screen to close, the shell prompt to return, the cursor
    to be visible and blinking, and the shell to be fully usable (type a command,
    press Enter, see it run).

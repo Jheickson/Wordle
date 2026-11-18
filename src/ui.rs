@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::app::{App, MenuEntry, Screen};
-use crate::game::{keyboard_index, TileState, MAX_ROUNDS, WORD_LEN};
+use crate::game::{keyboard_index, GameState, TileState, MAX_ROUNDS, WORD_LEN};
 
 /// Width of one tile cell.
 const TILE_WIDTH: u16 = 3;
@@ -140,8 +140,14 @@ fn render_game(frame: &mut Frame, app: &App, area: Rect) {
     );
     render_keyboard(frame, app, keyboard_area);
 
+    // While a game is playing, `q` is a typed letter; it only quits once the
+    // game has ended.
+    let hint = match app.game().state() {
+        GameState::Playing => "Esc: menu",
+        GameState::Won | GameState::Lost => "Esc: menu · q to quit",
+    };
     frame.render_widget(
-        Paragraph::new("Esc: menu · q to quit")
+        Paragraph::new(hint)
             .alignment(Alignment::Right)
             .style(Style::default().fg(Color::DarkGray)),
         hint_area,
