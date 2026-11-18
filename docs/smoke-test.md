@@ -25,7 +25,8 @@ if you see anything else.
 1. Type `zzzzz` and press Enter.
 2. Expect the message `Not in word list` on the message line, the board still
    empty, and no round consumed (the next valid guess still occupies row 1).
-3. Type `abc` and press Enter.
+3. A rejected word stays in the input buffer so it can be corrected: press
+   Backspace five times, then type `abc` and press Enter.
 4. Expect the message `Not enough letters`, the board still empty, and the
    typed letters `abc` still editable.
 5. Press Backspace three times: expect the typed letters to disappear one by
@@ -63,7 +64,7 @@ guess `crane`. Revert the edit afterwards (`git checkout src/app.rs`).
    the feedback off all-green (e.g. repeat a guess that showed a non-green
    tile each round).
 2. On the sixth submission, expect the message line to read
-   `The word was <ANSWER> press n for a new game`, with the answer in capital
+   `The word was <ANSWER>; press n for a new game`, with the answer in capital
    letters, and the full board to stay visible.
 3. Check that the revealed answer is consistent with at least one green tile
    from your guesses, if you had any.
