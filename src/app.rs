@@ -6,7 +6,8 @@
 //! resulting state and the event loop only translates keys into these calls.
 
 use crate::game::{
-    Answer, Game, GameError, GameState, DEFAULT_WORD_LEN, MAX_WORD_LEN, MIN_WORD_LEN,
+    Answer, Game, GameError, GameState, DEFAULT_ROUNDS, DEFAULT_WORD_LEN, MAX_ROUNDS, MAX_WORD_LEN,
+    MIN_ROUNDS, MIN_WORD_LEN,
 };
 use crate::words;
 
@@ -87,6 +88,8 @@ pub struct App {
     menu_selection: usize,
     /// Number of letters per word for the next game, chosen on the menu.
     word_size: usize,
+    /// Number of rounds for the next game, chosen on the menu.
+    max_rounds: usize,
 }
 
 impl App {
@@ -100,17 +103,19 @@ impl App {
     /// Starts a new game with a fixed answer, opening straight onto the game
     /// screen, for tests and deterministic setups.
     ///
-    /// The app's word size is set to the answer's length, so a following
-    /// [`App::new_game`] draws an answer of the same size.
+    /// The app's word size is set to the answer's length and its round limit
+    /// to [`DEFAULT_ROUNDS`], so a following [`App::new_game`] draws a game
+    /// with the same settings.
     pub fn with_answer(answer: Answer) -> Self {
         let word_size = answer.len();
         Self {
-            game: Game::new(answer),
+            game: Game::new(answer, DEFAULT_ROUNDS),
             typed: String::new(),
             message: None,
             screen: Screen::Game,
             menu_selection: 0,
             word_size,
+            max_rounds: DEFAULT_ROUNDS,
         }
     }
 
@@ -120,12 +125,12 @@ impl App {
     }
 
     /// Starts a fresh game with a newly drawn answer of the current word
-    /// size.
+    /// size and with the current round limit.
     ///
     /// The board, the typed word, and the message line are reset, so the app
     /// looks exactly as it does right after startup.
     pub fn new_game(&mut self) {
-        self.game = Game::new(words::random_answer(self.word_size));
+        self.game = Game::new(words::random_answer(self.word_size), self.max_rounds);
         self.typed.clear();
         self.message = None;
     }
@@ -173,11 +178,45 @@ impl App {
     }
 
     fn adjust_word_size(&mut self, delta: isize) {
-        if self.screen != Screen::Menu || self.menu_selection() != MenuEntry::StartGame {
+        if !self.start_entry_hovered() {
             return;
         }
         self.word_size = (self.word_size as isize + delta)
             .clamp(MIN_WORD_LEN as isize, MAX_WORD_LEN as isize) as usize;
+    }
+
+    /// The number of rounds the next game will allow.
+    pub fn max_rounds(&self) -> usize {
+        self.max_rounds
+    }
+
+    /// Shrinks the guess limit shown on the Start game entry by one round.
+    ///
+    /// The limit clamps at [`MIN_ROUNDS`]. The limit keys only act while the
+    /// menu cursor rests on Start game, so other entries ignore them.
+    pub fn decrease_max_rounds(&mut self) {
+        self.adjust_max_rounds(-1);
+    }
+
+    /// Grows the guess limit shown on the Start game entry by one round.
+    ///
+    /// The limit clamps at [`MAX_ROUNDS`]. The limit keys only act while the
+    /// menu cursor rests on Start game, so other entries ignore them.
+    pub fn increase_max_rounds(&mut self) {
+        self.adjust_max_rounds(1);
+    }
+
+    fn adjust_max_rounds(&mut self, delta: isize) {
+        if !self.start_entry_hovered() {
+            return;
+        }
+        self.max_rounds = (self.max_rounds as isize + delta)
+            .clamp(MIN_ROUNDS as isize, MAX_ROUNDS as isize) as usize;
+    }
+
+    /// Whether the menu cursor rests on the Start game entry.
+    fn start_entry_hovered(&self) -> bool {
+        self.screen == Screen::Menu && self.menu_selection() == MenuEntry::StartGame
     }
 
     /// Runs the menu entry under the cursor; returns `true` when the app
@@ -306,7 +345,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::MAX_ROUNDS;
+    use crate::game::DEFAULT_ROUNDS;
 
     fn app_with(answer: &str) -> App {
         App::with_answer(Answer::new(answer).expect("test answer is a supported word"))
@@ -433,21 +472,21 @@ mod tests {
     fn six_wrong_guesses_lose_the_game() {
         let mut app = app_with("crane");
 
-        for _ in 0..MAX_ROUNDS {
+        for _ in 0..DEFAULT_ROUNDS {
             type_word(&mut app, "slate");
             app.submit();
             assert_eq!(app.typed(), "");
         }
 
         assert_eq!(app.game().state(), GameState::Lost);
-        assert_eq!(app.game().rounds_played(), MAX_ROUNDS);
+        assert_eq!(app.game().rounds_played(), DEFAULT_ROUNDS);
     }
 
     #[test]
     fn losing_message_reveals_the_answer() {
         let mut app = app_with("swamp");
 
-        for _ in 0..MAX_ROUNDS {
+        for _ in 0..DEFAULT_ROUNDS {
             type_word(&mut app, "slate");
             app.submit();
         }
@@ -475,7 +514,7 @@ mod tests {
     #[test]
     fn new_game_after_a_loss_starts_fresh() {
         let mut app = app_with("crane");
-        for _ in 0..MAX_ROUNDS {
+        for _ in 0..DEFAULT_ROUNDS {
             type_word(&mut app, "slate");
             app.submit();
         }
@@ -576,6 +615,71 @@ mod tests {
             app.decrease_word_size();
         }
         assert_eq!(app.word_size(), MIN_WORD_LEN);
+    }
+
+    #[test]
+    fn guess_limit_changes_only_while_start_game_is_hovered() {
+        let mut app = app_with("crane");
+        app.open_menu();
+        assert_eq!(app.max_rounds(), DEFAULT_ROUNDS);
+
+        app.increase_max_rounds();
+        assert_eq!(app.max_rounds(), DEFAULT_ROUNDS + 1);
+        app.decrease_max_rounds();
+        app.decrease_max_rounds();
+        assert_eq!(app.max_rounds(), DEFAULT_ROUNDS - 1);
+
+        app.select_next_menu_entry();
+        app.increase_max_rounds();
+        assert_eq!(
+            app.max_rounds(),
+            DEFAULT_ROUNDS - 1,
+            "other entries ignore the limit keys"
+        );
+    }
+
+    #[test]
+    fn guess_limit_clamps_at_the_bounds() {
+        let mut app = app_with("crane");
+        app.open_menu();
+
+        for _ in 0..20 {
+            app.increase_max_rounds();
+        }
+        assert_eq!(app.max_rounds(), MAX_ROUNDS);
+
+        for _ in 0..30 {
+            app.decrease_max_rounds();
+        }
+        assert_eq!(app.max_rounds(), MIN_ROUNDS);
+    }
+
+    #[test]
+    fn starting_a_game_uses_the_selected_guess_limit() {
+        let mut app = app_with("crane");
+        app.open_menu();
+        app.decrease_max_rounds();
+        app.decrease_max_rounds();
+        assert_eq!(app.max_rounds(), DEFAULT_ROUNDS - 2);
+
+        assert!(!app.activate_menu_entry());
+
+        assert_eq!(app.screen(), Screen::Game);
+        assert_eq!(app.game().max_rounds(), DEFAULT_ROUNDS - 2);
+    }
+
+    #[test]
+    fn new_game_keeps_the_selected_guess_limit() {
+        let mut app = app_with("crane");
+        app.open_menu();
+        app.increase_max_rounds();
+        app.increase_max_rounds();
+        app.activate_menu_entry();
+
+        app.new_game();
+
+        assert_eq!(app.max_rounds(), DEFAULT_ROUNDS + 2);
+        assert_eq!(app.game().max_rounds(), DEFAULT_ROUNDS + 2);
     }
 
     #[test]

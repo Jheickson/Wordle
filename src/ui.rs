@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::app::{App, MenuEntry, Screen};
-use crate::game::{keyboard_index, GameState, TileState, MAX_ROUNDS};
+use crate::game::{keyboard_index, GameState, TileState};
 
 /// Width of one tile cell.
 const TILE_WIDTH: u16 = 3;
@@ -23,8 +23,10 @@ fn board_width(word_len: usize) -> u16 {
     word_len as u16 * TILE_WIDTH + (word_len as u16 - 1) * TILE_GAP
 }
 
-/// Total height of the board in rows (it always has [`MAX_ROUNDS`] rows).
-const BOARD_HEIGHT: u16 = MAX_ROUNDS as u16 * TILE_HEIGHT + (MAX_ROUNDS as u16 - 1) * ROW_GAP;
+/// Total height in rows of a board with `rounds` rows of tiles.
+fn board_height(rounds: usize, row_gap: u16) -> u16 {
+    rounds as u16 * TILE_HEIGHT + (rounds as u16 - 1) * row_gap
+}
 
 /// Rows of the on-screen keyboard, top to bottom.
 const KEYBOARD_ROWS: [&str; 3] = ["QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"];
@@ -32,14 +34,15 @@ const KEYBOARD_ROWS: [&str; 3] = ["QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"];
 const KEYBOARD_HEIGHT: u16 = KEYBOARD_ROWS.len() as u16;
 
 /// Width of the menu block in columns.
-const MENU_WIDTH: u16 = 22;
+const MENU_WIDTH: u16 = 36;
 
 /// Key hint shown on the menu screen.
 const MENU_HINT: &str = "↑/↓ select · Enter confirm · q quit";
 
 /// Key hint shown while the Start game entry is hovered, where ←/→ pick the
-/// word size.
-const START_GAME_HINT: &str = "↑/↓ select · ←/→ word size · Enter confirm · q quit";
+/// word size and -/+ pick the guess limit.
+const START_GAME_HINT: &str =
+    "↑/↓ select · ←/→ letters · -/+ guesses · Enter confirm · q quit";
 
 /// Text of the credits screen.
 const CREDITS_TEXT: &str = "WORDLE\n\nA terminal Wordle clone, built with\nRust, ratatui, and crossterm.";
@@ -83,9 +86,14 @@ fn render_menu(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             Style::default()
         };
-        // The Start game entry shows the word size picked with ←/→.
+        // The Start game entry shows the word size picked with ←/→ and the
+        // guess limit picked with -/+.
         let title = if entry == MenuEntry::StartGame {
-            format!("Start game ({} letters)", app.word_size())
+            format!(
+                "Start game ({} letters, {} guesses)",
+                app.word_size(),
+                app.max_rounds()
+            )
         } else {
             entry.title().to_string()
         };
@@ -151,14 +159,22 @@ fn render_game(frame: &mut Frame, app: &App, area: Rect) {
         message_area,
     );
 
+    let rounds = app.game().max_rounds();
+    // A tall board (up to 15 rows) may only fit without the row gaps.
+    let row_gap = if board_height(rounds, ROW_GAP) <= board_area.height {
+        ROW_GAP
+    } else {
+        0
+    };
     render_board(
         frame,
         app,
         centered_within(
             board_area,
             board_width(app.game().word_len()),
-            BOARD_HEIGHT,
+            board_height(rounds, row_gap),
         ),
+        row_gap,
     );
     render_keyboard(frame, app, keyboard_area);
 
@@ -176,19 +192,19 @@ fn render_game(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-/// Renders the board: [`MAX_ROUNDS`] rows of tiles, one tile per letter.
+/// Renders the board: one row per round the game allows, one tile per letter.
 ///
 /// Played rounds show their letters with the evaluation's colors, the active
 /// row shows the word being typed, and every cell without a guess yet shows a
 /// dimmed placeholder square so the player can see how many guesses remain.
-fn render_board(frame: &mut Frame, app: &App, grid: Rect) {
+fn render_board(frame: &mut Frame, app: &App, grid: Rect, row_gap: u16) {
     let board = app.game().board();
     let played = app.game().rounds_played();
     let typed = app.typed();
 
-    for row in 0..MAX_ROUNDS {
+    for row in 0..app.game().max_rounds() {
         for col in 0..app.game().word_len() {
-            let cell = tile_rect(grid, row, col);
+            let cell = tile_rect(grid, row, col, row_gap);
             if cell.is_empty() {
                 continue;
             }
@@ -288,10 +304,10 @@ fn display_letter(word: &str, index: usize) -> String {
 }
 
 /// The screen rectangle of one tile, clipped to the board area.
-fn tile_rect(grid: Rect, row: usize, col: usize) -> Rect {
+fn tile_rect(grid: Rect, row: usize, col: usize, row_gap: u16) -> Rect {
     Rect {
         x: grid.x + col as u16 * (TILE_WIDTH + TILE_GAP),
-        y: grid.y + row as u16 * (TILE_HEIGHT + ROW_GAP),
+        y: grid.y + row as u16 * (TILE_HEIGHT + row_gap),
         width: TILE_WIDTH,
         height: TILE_HEIGHT,
     }

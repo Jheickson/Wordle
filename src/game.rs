@@ -16,8 +16,14 @@ pub const MAX_WORD_LEN: usize = 8;
 /// The word size a new app starts with.
 pub const DEFAULT_WORD_LEN: usize = 5;
 
-/// Number of rounds a game lasts.
-pub const MAX_ROUNDS: usize = 6;
+/// Smallest selectable number of rounds a game lasts.
+pub const MIN_ROUNDS: usize = 1;
+
+/// Largest selectable number of rounds a game lasts.
+pub const MAX_ROUNDS: usize = 15;
+
+/// The number of rounds a new app starts with.
+pub const DEFAULT_ROUNDS: usize = 6;
 
 /// Classification of a single guessed letter against the answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -213,8 +219,8 @@ impl Round {
     }
 }
 
-/// The grid of rounds played so far: [`MAX_ROUNDS`] rows by the game's word
-/// size columns.
+/// The grid of rounds played so far: the game's round limit of rows by its
+/// word size of columns.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Board {
     rounds: Vec<Round>,
@@ -236,9 +242,9 @@ impl Board {
         self.rounds.len()
     }
 
-    /// Whether all [`MAX_ROUNDS`] rows have been filled.
-    pub fn is_full(&self) -> bool {
-        self.rounds.len() == MAX_ROUNDS
+    /// Whether `max_rounds` rows have been filled.
+    pub fn is_full(&self, max_rounds: usize) -> bool {
+        self.rounds.len() >= max_rounds
     }
 
     /// The best tile state seen for each letter across all played rounds.
@@ -276,7 +282,7 @@ pub enum GameState {
     Playing,
     /// A guess evaluated all-Correct.
     Won,
-    /// [`MAX_ROUNDS`] rounds passed without a win.
+    /// The round limit passed without a win.
     Lost,
 }
 
@@ -286,15 +292,21 @@ pub struct Game {
     answer: Answer,
     board: Board,
     state: GameState,
+    max_rounds: usize,
 }
 
 impl Game {
-    /// Starts a new game with the given answer.
-    pub fn new(answer: Answer) -> Self {
+    /// Starts a new game with the given answer and round limit.
+    pub fn new(answer: Answer, max_rounds: usize) -> Self {
+        assert!(
+            (MIN_ROUNDS..=MAX_ROUNDS).contains(&max_rounds),
+            "round limit {max_rounds} is outside {MIN_ROUNDS}..={MAX_ROUNDS}"
+        );
         Self {
             answer,
             board: Board::default(),
             state: GameState::Playing,
+            max_rounds,
         }
     }
 
@@ -306,6 +318,11 @@ impl Game {
     /// Number of letters in every word of this game.
     pub fn word_len(&self) -> usize {
         self.answer.len()
+    }
+
+    /// Number of rounds the game lasts.
+    pub fn max_rounds(&self) -> usize {
+        self.max_rounds
     }
 
     /// Current game state.
@@ -347,7 +364,7 @@ impl Game {
 
         self.state = if won {
             GameState::Won
-        } else if self.board.is_full() {
+        } else if self.board.is_full(self.max_rounds) {
             GameState::Lost
         } else {
             GameState::Playing
@@ -366,7 +383,7 @@ mod tests {
     use super::*;
 
     fn game(answer: &str) -> Game {
-        Game::new(Answer::new(answer).expect("valid test answer"))
+        Game::new(Answer::new(answer).expect("valid test answer"), DEFAULT_ROUNDS)
     }
 
     #[test]
@@ -475,6 +492,7 @@ mod tests {
     #[test]
     fn six_non_winning_guesses_end_the_game_as_lost() {
         let mut game = game("cigar");
+        let rounds = game.max_rounds();
         let guesses = ["moldy", "sweat", "plumb", "fudge", "knock", "vixen"];
 
         for (index, guess) in guesses.iter().enumerate() {
@@ -482,7 +500,7 @@ mod tests {
             assert_ne!(evaluation, &vec![TileState::Correct; 5]);
             assert_eq!(
                 game.state(),
-                if index + 1 == MAX_ROUNDS {
+                if index + 1 == rounds {
                     GameState::Lost
                 } else {
                     GameState::Playing
@@ -490,9 +508,37 @@ mod tests {
             );
         }
 
-        assert_eq!(game.rounds_played(), MAX_ROUNDS);
+        assert_eq!(game.rounds_played(), rounds);
         assert_eq!(game.submit_guess("cigar"), Err(GameError::GameOver));
-        assert_eq!(game.rounds_played(), MAX_ROUNDS);
+        assert_eq!(game.rounds_played(), rounds);
+    }
+
+    #[test]
+    fn a_custom_round_limit_ends_the_game_after_that_many_rounds() {
+        let mut game = Game::new(Answer::new("cigar").unwrap(), 3);
+
+        game.submit_guess("moldy").unwrap();
+        game.submit_guess("sweat").unwrap();
+        assert_eq!(game.state(), GameState::Playing);
+        game.submit_guess("plumb").unwrap();
+
+        assert_eq!(game.state(), GameState::Lost);
+        assert_eq!(game.rounds_played(), 3);
+    }
+
+    #[test]
+    fn a_one_round_game_ends_after_the_first_wrong_guess() {
+        let mut game = Game::new(Answer::new("cigar").unwrap(), MIN_ROUNDS);
+
+        game.submit_guess("moldy").unwrap();
+
+        assert_eq!(game.state(), GameState::Lost);
+    }
+
+    #[test]
+    #[should_panic(expected = "outside")]
+    fn round_limits_outside_the_selectable_range_are_rejected() {
+        let _ = Game::new(Answer::new("cigar").unwrap(), MAX_ROUNDS + 1);
     }
 
     #[test]

@@ -16,8 +16,8 @@ if you see anything else.
 
 1. Run `cargo run`.
 2. Expect the alternate screen to open on the main menu: the `WORDLE` title and
-   the entries `Start game (5 letters)`, `Credits`, `Repository`, `Quit`, with
-   Start game highlighted, plus the key hint at the bottom.
+   the entries `Start game (5 letters, 6 guesses)`, `Credits`, `Repository`,
+   `Quit`, with Start game highlighted, plus the key hint at the bottom.
 3. Press Enter: expect a centered 6×5 board of dimmed placeholder squares (one
    square per remaining guess), an empty message line above it, and `Esc: menu`
    in the bottom-right corner (`q to quit` appears there only once the game has
@@ -121,20 +121,21 @@ guess `crane`. Revert the edit afterwards (`git checkout src/app.rs`).
 
 ## 11. Word size selection
 
-1. Run `cargo run` and stop on the menu. Expect `Start game (5 letters)` as the
-   highlighted first entry and the hint `↑/↓ select · ←/→ word size · Enter
-   confirm · q quit`.
-2. Press Right twice: expect the entry to read `Start game (7 letters)` and the
-   app to stay on the menu. Press Left once: expect `Start game (6 letters)`.
-3. Press Left repeatedly: the size stops at `Start game (3 letters)` and does
-   not wrap below it.
-4. Press Right repeatedly: the size stops at `Start game (8 letters)` and does
-   not wrap above it.
+1. Run `cargo run` and stop on the menu. Expect `Start game (5 letters, 6
+   guesses)` as the highlighted first entry and the hint `↑/↓ select · ←/→
+   letters · -/+ guesses · Enter confirm · q quit`.
+2. Press Right twice: expect the entry to read `Start game (7 letters, 6
+   guesses)` and the app to stay on the menu. Press Left once: expect `Start
+   game (6 letters, 6 guesses)`.
+3. Press Left repeatedly: the size stops at `Start game (3 letters, 6 guesses)`
+   and does not wrap below it.
+4. Press Right repeatedly: the size stops at `Start game (8 letters, 6
+   guesses)` and does not wrap above it.
 5. Press Down to hover Credits, then Right: expect the Credits entry to stay
    highlighted and no size change. Press Up to return to Start game.
 6. Select 4 letters and press Enter: expect a centered 4-wide, 6-row board of
    dimmed placeholders (a 4-letter game).
-7. Press Enter with an empty buffer: expect `Not enough letters`. Type `qqqq`
+7. Press Enter with an empty buffer: expect `Not enough letters`. Type `zqxj`
    and press Enter: expect `Not in word list`.
 8. Submit six valid four-letter guesses (e.g. `that`, `this`, `with`, `from`,
    `have`, `more`): each must be accepted onto the board, and after the sixth
@@ -142,8 +143,35 @@ guess `crane`. Revert the edit afterwards (`git checkout src/app.rs`).
    press n for a new game`.
 9. Press `n`: expect a fresh 4-wide, 6-row board.
 10. Press Esc, then select 8 letters and press Enter: expect a centered 8-wide
-    board. Type eight letters (`qqqqqqqq`) and press Enter: expect `Not in word
+    board. Type eight letters (`zqxjzqxj`) and press Enter: expect `Not in word
     list` after accepting all eight characters, proving the input buffer tracks
     the selected size.
-11. Press Esc: expect the menu entry to still read `Start game (8 letters)`.
-    Press `q`: expect the app to quit cleanly (exit status 0).
+11. Press Esc: expect the menu entry to still read `Start game (8 letters, 6
+    guesses)`. Press `q`: expect the app to quit cleanly (exit status 0).
+
+## 12. Guess limit selection
+
+1. Run `cargo run` and stop on the menu with Start game hovered. Press `+`
+   three times: expect `Start game (5 letters, 9 guesses)`. Press `-` once:
+   expect `Start game (5 letters, 8 guesses)`.
+2. Press `+` repeatedly: the count stops at `Start game (5 letters, 15
+   guesses)` and does not wrap above it.
+3. Press `-` repeatedly: the count stops at `Start game (5 letters, 1 guess)`
+   and does not wrap below it.
+4. Press Down to hover Credits, then `+`: expect the Credits entry highlighted
+   and no count change. Press Up to return to Start game.
+5. Set 2 guesses and press Enter: expect a 2-row, 5-wide board. Submit valid
+   guesses until the message line shows `You won! press n for a new game` or
+   `The word was <ANSWER>; press n for a new game`; it must appear after at
+   most two submissions, and no third guess is accepted as a round.
+6. Press `n`: expect a fresh 2-row board (the limit is kept).
+7. Press Esc, select 15 guesses, and press Enter: expect a 15-row board that
+   still fits the 80×24 screen (row gaps collapse), with the keyboard and the
+   `Esc: menu` hint visible below it. Submit a guess and expect it on row 1.
+8. Submit fifteen valid five-letter guesses (e.g. `crane`, `slate`, `audio`,
+   `house`, `plant`, `stone`, `brown`, `clock`, `drink`, `glory`, `honey`,
+   `ideal`, `joint`, `knife`, `lemon`): after the fifteenth expect the end-state
+   message and the last row's letters to be visible on screen (no clipped-away
+   row at 80×24).
+9. Press Esc: expect `Start game (5 letters, 15 guesses)`. Press `q`: expect a
+   clean exit (status 0).

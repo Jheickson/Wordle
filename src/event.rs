@@ -36,6 +36,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
             KeyCode::Down | KeyCode::Char('j') => app.select_next_menu_entry(),
             KeyCode::Left | KeyCode::Char('h') => app.decrease_word_size(),
             KeyCode::Right | KeyCode::Char('l') => app.increase_word_size(),
+            KeyCode::Char('-') | KeyCode::Char('_') => app.decrease_max_rounds(),
+            KeyCode::Char('+') | KeyCode::Char('=') => app.increase_max_rounds(),
             KeyCode::Char('q') => return true,
             KeyCode::Enter => return app.activate_menu_entry(),
             _ => {}
@@ -70,7 +72,7 @@ mod tests {
     use super::*;
 
     use crate::app::MenuEntry;
-    use crate::game::{Answer, MAX_ROUNDS};
+    use crate::game::{Answer, DEFAULT_ROUNDS};
 
     fn app() -> App {
         App::with_answer(Answer::new("crane").expect("test answer is a supported word"))
@@ -93,7 +95,7 @@ mod tests {
     }
 
     fn lose(app: &mut App) {
-        for _ in 0..MAX_ROUNDS {
+        for _ in 0..DEFAULT_ROUNDS {
             type_word(app, "slate");
             handle_key(app, key(KeyCode::Enter));
         }
@@ -386,5 +388,32 @@ mod tests {
 
         assert_eq!(app.word_size(), 5);
         assert_eq!(app.typed(), "");
+    }
+
+    #[test]
+    fn minus_and_plus_change_the_guess_limit_on_start_game() {
+        let mut app = app();
+        handle_key(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.max_rounds(), DEFAULT_ROUNDS);
+
+        handle_key(&mut app, key(KeyCode::Char('+')));
+        assert_eq!(app.max_rounds(), DEFAULT_ROUNDS + 1);
+        handle_key(&mut app, key(KeyCode::Char('=')));
+        assert_eq!(app.max_rounds(), DEFAULT_ROUNDS + 2);
+        handle_key(&mut app, key(KeyCode::Char('-')));
+        assert_eq!(app.max_rounds(), DEFAULT_ROUNDS + 1);
+        handle_key(&mut app, key(KeyCode::Char('_')));
+        assert_eq!(app.max_rounds(), DEFAULT_ROUNDS);
+    }
+
+    #[test]
+    fn guess_limit_keys_are_ignored_off_start_game() {
+        let mut app = app();
+        handle_key(&mut app, key(KeyCode::Esc));
+        handle_key(&mut app, key(KeyCode::Down));
+        assert_eq!(app.menu_selection(), MenuEntry::Credits);
+
+        handle_key(&mut app, key(KeyCode::Char('+')));
+        assert_eq!(app.max_rounds(), DEFAULT_ROUNDS);
     }
 }
