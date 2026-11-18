@@ -151,7 +151,8 @@ fn render_game(frame: &mut Frame, app: &App, area: Rect) {
 /// Renders the six rows of five tiles.
 ///
 /// Played rounds show their letters with the evaluation's colors, the active
-/// row shows the word being typed, and the remaining rows stay blank.
+/// row shows the word being typed, and every cell without a guess yet shows a
+/// dimmed placeholder square so the player can see how many guesses remain.
 fn render_board(frame: &mut Frame, app: &App, grid: Rect) {
     let board = app.game().board();
     let played = app.game().rounds_played();
@@ -172,13 +173,20 @@ fn render_board(frame: &mut Frame, app: &App, grid: Rect) {
                         tile_style(evaluation[col]),
                     )
                 }
-                None if row == played => (
-                    display_letter(typed, col),
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                None => (String::new(), Style::default()),
+                None if row == played => {
+                    let letter = display_letter(typed, col);
+                    if letter.is_empty() {
+                        (String::new(), placeholder_style())
+                    } else {
+                        (
+                            letter,
+                            Style::default()
+                                .fg(Color::White)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    }
+                }
+                None => (String::new(), placeholder_style()),
             };
 
             frame.render_widget(
@@ -235,6 +243,12 @@ fn tile_style(state: TileState) -> Style {
         .fg(Color::Black)
         .bg(color)
         .add_modifier(Modifier::BOLD)
+}
+
+/// Style of a tile with no guess yet: a dimmed square that shows the player
+/// how many guesses remain.
+fn placeholder_style() -> Style {
+    Style::default().bg(Color::DarkGray)
 }
 
 /// The uppercase letter at `index` of `word`, if any.

@@ -15,8 +15,9 @@ if you see anything else.
 ## 1. Fresh run
 
 1. Run `cargo run`.
-2. Expect the alternate screen to open with a centered 6×5 empty board, an
-   empty message line above it, and `q to quit` in the bottom-right corner.
+2. Expect the alternate screen to open with a centered 6×5 board of dimmed
+   placeholder squares (one square per remaining guess), an empty message line
+   above it, and `q to quit` in the bottom-right corner.
 3. Expect no shell text or previous screen contents to show through, and no
    cursor blinking over the board (the app hides it while drawing).
 
@@ -55,7 +56,8 @@ guess `crane`. Revert the edit afterwards (`git checkout src/app.rs`).
 ## 5. New game from the won state
 
 1. From the won state of section 4, press `n`.
-2. Expect a completely empty board, the message line cleared, and play resumed.
+2. Expect a board showing only dimmed placeholder squares again, the message
+   line cleared, and play resumed.
 3. Win again and press Enter instead of `n`: expect the same fresh game.
 
 ## 6. Loss reveals the answer
@@ -72,7 +74,7 @@ guess `crane`. Revert the edit afterwards (`git checkout src/app.rs`).
 ## 7. New game from the lost state
 
 1. From the lost state of section 6, press `n`.
-2. Expect a fresh empty board and a cleared message line.
+2. Expect a fresh board of placeholder squares and a cleared message line.
 3. Lose again (repeat section 6) and press Enter instead of `n`: expect the same
    fresh game.
 
