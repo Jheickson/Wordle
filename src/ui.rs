@@ -1,11 +1,12 @@
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::Paragraph,
     Frame,
 };
 
-use crate::app::App;
+use crate::app::{App, MenuEntry, Screen};
 use crate::game::{TileState, MAX_ROUNDS, WORD_LEN};
 
 /// Width of one tile cell.
@@ -22,17 +23,101 @@ const BOARD_WIDTH: u16 = WORD_LEN as u16 * TILE_WIDTH + (WORD_LEN as u16 - 1) * 
 /// Total height of the 6×5 board in rows.
 const BOARD_HEIGHT: u16 = MAX_ROUNDS as u16 * TILE_HEIGHT + (MAX_ROUNDS as u16 - 1) * ROW_GAP;
 
+/// Width of the menu block in columns.
+const MENU_WIDTH: u16 = 10;
+
+/// Key hint shown on the menu screen.
+const MENU_HINT: &str = "↑/↓ select · Enter confirm · q quit";
+
+/// Text of the credits screen.
+const CREDITS_TEXT: &str = "WORDLE\n\nA terminal Wordle clone, built with\nRust, ratatui, and crossterm.";
+
+/// Text of the repository screen.
+const REPOSITORY_TEXT: &str = "Repository\n\nhttps://github.com/Jheickson/Wordle";
+
 /// Renders the application into the terminal frame.
 ///
-/// The UI is a pure function of the app state: the transient message line on
-/// top, the 6×5 board in the middle, and a quit hint at the bottom.
+/// The UI is a pure function of the app state: the screen being shown picks
+/// the layout among the menu, the credits, the repository, and the game.
 pub fn render(frame: &mut Frame, app: &App) {
+    match app.screen() {
+        Screen::Menu => render_menu(frame, app, frame.area()),
+        Screen::Credits => render_text_screen(frame, CREDITS_TEXT, "Esc: back", frame.area()),
+        Screen::Repository => {
+            render_text_screen(frame, REPOSITORY_TEXT, "Esc: back", frame.area())
+        }
+        Screen::Game => render_game(frame, app, frame.area()),
+    }
+}
+
+/// Renders the main menu: title, its selectable entries, and a key hint.
+///
+/// The entry under the cursor is drawn reversed to set it apart from the
+/// others.
+fn render_menu(frame: &mut Frame, app: &App, area: Rect) {
+    let [content_area, hint_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "WORDLE",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::default(),
+    ];
+    lines.extend(MenuEntry::ALL.iter().map(|&entry| {
+        let style = if entry == app.menu_selection() {
+            Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        Line::from(Span::styled(entry.title(), style))
+    }));
+    let height = lines.len() as u16;
+
+    frame.render_widget(
+        Paragraph::new(lines).alignment(Alignment::Center),
+        centered_within(content_area, MENU_WIDTH, height),
+    );
+
+    frame.render_widget(
+        Paragraph::new(MENU_HINT)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::DarkGray)),
+        hint_area,
+    );
+}
+
+/// Renders a centered block of text with a hint at the bottom.
+fn render_text_screen(frame: &mut Frame, text: &str, hint: &str, area: Rect) {
+    let [content_area, hint_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+
+    let lines: Vec<Line> = text.lines().map(Line::from).collect();
+    let width = lines.iter().map(Line::width).max().unwrap_or(0) as u16;
+    let height = lines.len() as u16;
+
+    frame.render_widget(
+        Paragraph::new(lines).alignment(Alignment::Center),
+        centered_within(content_area, width, height),
+    );
+
+    frame.render_widget(
+        Paragraph::new(hint)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::DarkGray)),
+        hint_area,
+    );
+}
+
+/// Renders the game screen: message line, board, and key hint.
+fn render_game(frame: &mut Frame, app: &App, area: Rect) {
     let [message_area, board_area, hint_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
         Constraint::Length(1),
     ])
-    .areas(frame.area());
+    .areas(area);
 
     let message = app.message().unwrap_or_default();
     frame.render_widget(
@@ -42,10 +127,10 @@ pub fn render(frame: &mut Frame, app: &App) {
         message_area,
     );
 
-    render_board(frame, app, centered(board_area));
+    render_board(frame, app, centered_within(board_area, BOARD_WIDTH, BOARD_HEIGHT));
 
     frame.render_widget(
-        Paragraph::new("q to quit")
+        Paragraph::new("Esc: menu · q to quit")
             .alignment(Alignment::Right)
             .style(Style::default().fg(Color::DarkGray)),
         hint_area,
@@ -127,10 +212,10 @@ fn tile_rect(grid: Rect, row: usize, col: usize) -> Rect {
     .intersection(grid)
 }
 
-/// The board rectangle centered in `area`, clamped to its size.
-fn centered(area: Rect) -> Rect {
-    let width = BOARD_WIDTH.min(area.width);
-    let height = BOARD_HEIGHT.min(area.height);
+/// The rectangle of `width`×`height` centered in `area`, clamped to its size.
+fn centered_within(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
     Rect {
         x: area.x + (area.width - width) / 2,
         y: area.y + (area.height - height) / 2,

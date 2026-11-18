@@ -28,6 +28,51 @@ const NEW_GAME_PROMPT: &str = "press n for a new game";
 fn won_message() -> String {
     format!("{WON_MESSAGE} {NEW_GAME_PROMPT}")
 }
+/// One selectable entry of the main menu, in display order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuEntry {
+    /// Starts a fresh game.
+    StartGame,
+    /// Shows who built the game.
+    Credits,
+    /// Shows where the source lives.
+    Repository,
+    /// Exits the app.
+    Quit,
+}
+
+impl MenuEntry {
+    /// Every entry in display order.
+    pub const ALL: [MenuEntry; 4] = [
+        MenuEntry::StartGame,
+        MenuEntry::Credits,
+        MenuEntry::Repository,
+        MenuEntry::Quit,
+    ];
+
+    /// The label shown on screen.
+    pub fn title(self) -> &'static str {
+        match self {
+            MenuEntry::StartGame => "Start game",
+            MenuEntry::Credits => "Credits",
+            MenuEntry::Repository => "Repository",
+            MenuEntry::Quit => "Quit",
+        }
+    }
+}
+
+/// Which screen the app is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    /// The selectable main menu, shown on startup.
+    Menu,
+    /// An in-progress game.
+    Game,
+    /// The credits text.
+    Credits,
+    /// The repository link.
+    Repository,
+}
 
 /// Application state (the model).
 #[derive(Debug)]
@@ -35,21 +80,28 @@ pub struct App {
     game: Game,
     typed: String,
     message: Option<String>,
+    screen: Screen,
+    /// Index into [`MenuEntry::ALL`]; only mutated by the select methods.
+    menu_selection: usize,
 }
 
 impl App {
-    /// Starts a new game with a randomly drawn answer.
+    /// Starts a new game with a randomly drawn answer and opens on the menu.
     pub fn new() -> Self {
-        Self::with_answer(words::random_answer())
+        let mut app = Self::with_answer(words::random_answer());
+        app.screen = Screen::Menu;
+        app
     }
 
-    /// Starts a new game with a fixed answer, for tests and deterministic
-    /// setups.
+    /// Starts a new game with a fixed answer, opening straight onto the game
+    /// screen, for tests and deterministic setups.
     pub fn with_answer(answer: Answer) -> Self {
         Self {
             game: Game::new(answer),
             typed: String::new(),
             message: None,
+            screen: Screen::Game,
+            menu_selection: 0,
         }
     }
 
@@ -66,6 +118,53 @@ impl App {
         self.game = Game::new(words::random_answer());
         self.typed.clear();
         self.message = None;
+    }
+
+    /// The screen currently shown.
+    pub fn screen(&self) -> Screen {
+        self.screen
+    }
+
+    /// The menu entry the cursor rests on.
+    pub fn menu_selection(&self) -> MenuEntry {
+        MenuEntry::ALL[self.menu_selection]
+    }
+
+    /// Moves the menu cursor up, wrapping from the first entry to the last.
+    pub fn select_previous_menu_entry(&mut self) {
+        self.menu_selection =
+            (self.menu_selection + MenuEntry::ALL.len() - 1) % MenuEntry::ALL.len();
+    }
+
+    /// Moves the menu cursor down, wrapping from the last entry to the first.
+    pub fn select_next_menu_entry(&mut self) {
+        self.menu_selection = (self.menu_selection + 1) % MenuEntry::ALL.len();
+    }
+
+    /// Runs the menu entry under the cursor; returns `true` when the app
+    /// should quit.
+    ///
+    /// Start game resets the board, the typed word, and the message line,
+    /// exactly like the `n` replay after a finished game.
+    pub fn activate_menu_entry(&mut self) -> bool {
+        match self.menu_selection() {
+            MenuEntry::StartGame => {
+                self.new_game();
+                self.screen = Screen::Game;
+            }
+            MenuEntry::Credits => self.screen = Screen::Credits,
+            MenuEntry::Repository => self.screen = Screen::Repository,
+            MenuEntry::Quit => return true,
+        }
+        false
+    }
+
+    /// Returns from any screen to the menu.
+    ///
+    /// The game underneath is left untouched; starting a game from the menu
+    /// always begins a fresh one via [`App::activate_menu_entry`].
+    pub fn open_menu(&mut self) {
+        self.screen = Screen::Menu;
     }
 
     /// The word currently being typed.
@@ -384,5 +483,68 @@ mod tests {
         assert_eq!(app.typed(), "");
         assert_eq!(app.game().rounds_played(), 1);
         assert_eq!(app.message(), Some(won_message().as_str()));
+    }
+
+    #[test]
+    fn a_new_app_opens_on_the_menu() {
+        let app = App::new();
+
+        assert_eq!(app.screen(), Screen::Menu);
+        assert_eq!(app.menu_selection(), MenuEntry::StartGame);
+    }
+
+    #[test]
+    fn menu_selection_wraps_in_both_directions() {
+        let mut app = app_with("crane");
+        app.open_menu();
+
+        app.select_previous_menu_entry();
+        assert_eq!(app.menu_selection(), MenuEntry::Quit);
+
+        app.select_next_menu_entry();
+        assert_eq!(app.menu_selection(), MenuEntry::StartGame);
+    }
+
+    #[test]
+    fn start_game_resets_the_round_and_switches_to_the_game() {
+        let mut app = app_with("crane");
+        type_word(&mut app, "slate");
+        app.submit();
+        app.open_menu();
+
+        assert!(!app.activate_menu_entry());
+
+        assert_eq!(app.screen(), Screen::Game);
+        assert_eq!(app.game().state(), GameState::Playing);
+        assert_eq!(app.game().rounds_played(), 0);
+        assert_eq!(app.typed(), "");
+        assert_eq!(app.message(), None);
+    }
+
+    #[test]
+    fn activating_credits_and_repository_switch_screens() {
+        let mut app = app_with("crane");
+        app.open_menu();
+
+        app.select_next_menu_entry();
+        assert!(!app.activate_menu_entry());
+        assert_eq!(app.screen(), Screen::Credits);
+
+        app.open_menu();
+        app.select_next_menu_entry();
+        assert!(!app.activate_menu_entry());
+        assert_eq!(app.screen(), Screen::Repository);
+
+        app.open_menu();
+        assert_eq!(app.screen(), Screen::Menu);
+    }
+
+    #[test]
+    fn activating_quit_asks_to_quit() {
+        let mut app = app_with("crane");
+        app.open_menu();
+        app.select_previous_menu_entry();
+
+        assert!(app.activate_menu_entry());
     }
 }

@@ -11,4 +11,6 @@ Domain vocabulary for the terminal Wordle game. Use these terms in issues, tests
 - **Answer list** — embedded list of possible answers (`assets/answers.txt`). A superset-restricted subset of the valid-guess list.
 - **Valid-guess list** — embedded list of acceptable guesses (`assets/allowed.txt`); contains the answer list.
 - **Game state** — `Playing → Won | Lost`. Won: a guess evaluates all-Correct. Lost: 6 rounds pass without a win.
-- **App state** — the TUI model: game state plus the word currently being typed and a transient message line (e.g. "not a valid word").
+- **Screen** — which view the TUI shows: **Menu** (startup), **Game**, **Credits**, or **Repository**. `Esc` leaves the game and the info screens for the menu.
+- **Menu** — the startup screen's selectable entries: Start game, Credits, Repository, Quit. The cursor wraps; Start game always begins a fresh game.
+- **App state** — the TUI model: game state plus the word currently being typed, a transient message line (e.g. "not a valid word"), the screen being shown, and the menu cursor.
