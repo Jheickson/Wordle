@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::app::{App, MenuEntry, Screen};
-use crate::game::{keyboard_index, GameState, TileState, MAX_ROUNDS, WORD_LEN};
+use crate::game::{keyboard_index, GameState, TileState, MAX_ROUNDS};
 
 /// Width of one tile cell.
 const TILE_WIDTH: u16 = 3;
@@ -18,9 +18,12 @@ const TILE_HEIGHT: u16 = 1;
 /// Gap between two rows of tiles.
 const ROW_GAP: u16 = 1;
 
-/// Total width of the 6×5 board in columns.
-const BOARD_WIDTH: u16 = WORD_LEN as u16 * TILE_WIDTH + (WORD_LEN as u16 - 1) * TILE_GAP;
-/// Total height of the 6×5 board in rows.
+/// Total width in columns of a board whose words have `word_len` letters.
+fn board_width(word_len: usize) -> u16 {
+    word_len as u16 * TILE_WIDTH + (word_len as u16 - 1) * TILE_GAP
+}
+
+/// Total height of the board in rows (it always has [`MAX_ROUNDS`] rows).
 const BOARD_HEIGHT: u16 = MAX_ROUNDS as u16 * TILE_HEIGHT + (MAX_ROUNDS as u16 - 1) * ROW_GAP;
 
 /// Rows of the on-screen keyboard, top to bottom.
@@ -29,10 +32,14 @@ const KEYBOARD_ROWS: [&str; 3] = ["QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"];
 const KEYBOARD_HEIGHT: u16 = KEYBOARD_ROWS.len() as u16;
 
 /// Width of the menu block in columns.
-const MENU_WIDTH: u16 = 10;
+const MENU_WIDTH: u16 = 22;
 
 /// Key hint shown on the menu screen.
 const MENU_HINT: &str = "↑/↓ select · Enter confirm · q quit";
+
+/// Key hint shown while the Start game entry is hovered, where ←/→ pick the
+/// word size.
+const START_GAME_HINT: &str = "↑/↓ select · ←/→ word size · Enter confirm · q quit";
 
 /// Text of the credits screen.
 const CREDITS_TEXT: &str = "WORDLE\n\nA terminal Wordle clone, built with\nRust, ratatui, and crossterm.";
@@ -76,7 +83,13 @@ fn render_menu(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             Style::default()
         };
-        Line::from(Span::styled(entry.title(), style))
+        // The Start game entry shows the word size picked with ←/→.
+        let title = if entry == MenuEntry::StartGame {
+            format!("Start game ({} letters)", app.word_size())
+        } else {
+            entry.title().to_string()
+        };
+        Line::from(Span::styled(title, style))
     }));
     let height = lines.len() as u16;
 
@@ -85,8 +98,13 @@ fn render_menu(frame: &mut Frame, app: &App, area: Rect) {
         centered_within(content_area, MENU_WIDTH, height),
     );
 
+    let hint = if app.menu_selection() == MenuEntry::StartGame {
+        START_GAME_HINT
+    } else {
+        MENU_HINT
+    };
     frame.render_widget(
-        Paragraph::new(MENU_HINT)
+        Paragraph::new(hint)
             .alignment(Alignment::Center)
             .style(Style::default().fg(Color::DarkGray)),
         hint_area,
@@ -136,7 +154,11 @@ fn render_game(frame: &mut Frame, app: &App, area: Rect) {
     render_board(
         frame,
         app,
-        centered_within(board_area, BOARD_WIDTH, BOARD_HEIGHT),
+        centered_within(
+            board_area,
+            board_width(app.game().word_len()),
+            BOARD_HEIGHT,
+        ),
     );
     render_keyboard(frame, app, keyboard_area);
 
@@ -154,7 +176,7 @@ fn render_game(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-/// Renders the six rows of five tiles.
+/// Renders the board: [`MAX_ROUNDS`] rows of tiles, one tile per letter.
 ///
 /// Played rounds show their letters with the evaluation's colors, the active
 /// row shows the word being typed, and every cell without a guess yet shows a
@@ -165,7 +187,7 @@ fn render_board(frame: &mut Frame, app: &App, grid: Rect) {
     let typed = app.typed();
 
     for row in 0..MAX_ROUNDS {
-        for col in 0..WORD_LEN {
+        for col in 0..app.game().word_len() {
             let cell = tile_rect(grid, row, col);
             if cell.is_empty() {
                 continue;

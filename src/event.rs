@@ -34,6 +34,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
         Screen::Menu => match key.code {
             KeyCode::Up | KeyCode::Char('k') => app.select_previous_menu_entry(),
             KeyCode::Down | KeyCode::Char('j') => app.select_next_menu_entry(),
+            KeyCode::Left | KeyCode::Char('h') => app.decrease_word_size(),
+            KeyCode::Right | KeyCode::Char('l') => app.increase_word_size(),
             KeyCode::Char('q') => return true,
             KeyCode::Enter => return app.activate_menu_entry(),
             _ => {}
@@ -71,7 +73,7 @@ mod tests {
     use crate::game::{Answer, MAX_ROUNDS};
 
     fn app() -> App {
-        App::with_answer(Answer::new("crane").expect("test answer is a five-letter word"))
+        App::with_answer(Answer::new("crane").expect("test answer is a supported word"))
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -346,5 +348,43 @@ mod tests {
 
         assert_eq!(app.typed(), "sla", "menu keys never reach the game");
         assert_eq!(app.game().rounds_played(), 0);
+    }
+
+    #[test]
+    fn left_and_right_change_the_word_size_on_start_game() {
+        let mut app = app();
+        handle_key(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.word_size(), 5);
+
+        handle_key(&mut app, key(KeyCode::Right));
+        assert_eq!(app.word_size(), 6);
+        handle_key(&mut app, key(KeyCode::Left));
+        assert_eq!(app.word_size(), 5);
+        handle_key(&mut app, key(KeyCode::Char('l')));
+        assert_eq!(app.word_size(), 6);
+        handle_key(&mut app, key(KeyCode::Char('h')));
+        assert_eq!(app.word_size(), 5);
+    }
+
+    #[test]
+    fn word_size_keys_are_ignored_off_start_game() {
+        let mut app = app();
+        handle_key(&mut app, key(KeyCode::Esc));
+        handle_key(&mut app, key(KeyCode::Down));
+        assert_eq!(app.menu_selection(), MenuEntry::Credits);
+
+        handle_key(&mut app, key(KeyCode::Right));
+        assert_eq!(app.word_size(), 5);
+    }
+
+    #[test]
+    fn word_size_keys_do_nothing_while_playing() {
+        let mut app = app();
+
+        handle_key(&mut app, key(KeyCode::Right));
+        handle_key(&mut app, key(KeyCode::Left));
+
+        assert_eq!(app.word_size(), 5);
+        assert_eq!(app.typed(), "");
     }
 }

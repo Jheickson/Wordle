@@ -1,83 +1,142 @@
 //! Embedded word lists, guess validation, and answer selection.
 //!
-//! Both lists are compiled into the binary with [`include_str!`], so no file
-//! I/O happens at runtime. The lists are parsed lazily, once, on first use;
-//! a malformed list makes that first use panic with the offending source and
-//! word, since the embedded data can only be wrong at compile time.
+//! One answer list and one allowed list are embedded per supported word size
+//! with [`include_str!`], so no file I/O happens at runtime. The lists are
+//! parsed lazily, once, on first use; a malformed list makes that first use
+//! panic with the offending source and word, since the embedded data can only
+//! be wrong at compile time.
 
 use std::collections::HashSet;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::game::{Answer, WORD_LEN};
+use crate::game::{Answer, MAX_WORD_LEN, MIN_WORD_LEN};
 
-/// The words a game may choose as its secret answer.
-const ANSWERS: &str = include_str!("../assets/answers.txt");
-
-/// Every word the player is allowed to guess (a superset of [`ANSWERS`]).
-const ALLOWED: &str = include_str!("../assets/allowed.txt");
+/// The embedded answer and allowed lists, one pair per supported word size.
+const EMBEDDED: [(usize, &str, &str); 6] = [
+    (
+        3,
+        include_str!("../assets/answers-3.txt"),
+        include_str!("../assets/allowed-3.txt"),
+    ),
+    (
+        4,
+        include_str!("../assets/answers-4.txt"),
+        include_str!("../assets/allowed-4.txt"),
+    ),
+    (
+        5,
+        include_str!("../assets/answers-5.txt"),
+        include_str!("../assets/allowed-5.txt"),
+    ),
+    (
+        6,
+        include_str!("../assets/answers-6.txt"),
+        include_str!("../assets/allowed-6.txt"),
+    ),
+    (
+        7,
+        include_str!("../assets/answers-7.txt"),
+        include_str!("../assets/allowed-7.txt"),
+    ),
+    (
+        8,
+        include_str!("../assets/answers-8.txt"),
+        include_str!("../assets/allowed-8.txt"),
+    ),
+];
 
 struct Dictionary {
+    word_len: usize,
     answers: Vec<&'static str>,
     allowed: HashSet<&'static str>,
 }
 
-static DICTIONARY: LazyLock<Dictionary> = LazyLock::new(build_dictionary);
+static DICTIONARIES: LazyLock<Vec<Dictionary>> = LazyLock::new(build_dictionaries);
 
-fn dictionary() -> &'static Dictionary {
-    &DICTIONARY
+fn dictionaries() -> &'static [Dictionary] {
+    &DICTIONARIES
 }
 
-fn build_dictionary() -> Dictionary {
-    let answers = parse_list(ANSWERS, "assets/answers.txt");
-    let allowed = parse_list(ALLOWED, "assets/allowed.txt");
+/// The word lists of one size; panics for a size outside the supported range,
+/// which only a programming error can request.
+fn dictionary(word_len: usize) -> &'static Dictionary {
+    assert!(
+        (MIN_WORD_LEN..=MAX_WORD_LEN).contains(&word_len),
+        "no embedded word lists for size {word_len}"
+    );
+    dictionaries()
+        .iter()
+        .find(|dictionary| dictionary.word_len == word_len)
+        .expect("every supported size has an embedded dictionary")
+}
+
+fn build_dictionaries() -> Vec<Dictionary> {
+    EMBEDDED
+        .iter()
+        .map(|&(word_len, answers, allowed)| build_dictionary(word_len, answers, allowed))
+        .collect()
+}
+
+fn build_dictionary(word_len: usize, answers: &'static str, allowed: &'static str) -> Dictionary {
+    let answers = parse_list(answers, word_len, "answers");
+    let allowed = parse_list(allowed, word_len, "allowed");
     let allowed: HashSet<&'static str> = allowed.into_iter().collect();
 
     for answer in &answers {
         assert!(
             allowed.contains(answer),
-            "answer {answer:?} is missing from assets/allowed.txt"
+            "answer {answer:?} is missing from the {word_len}-letter allowed list"
         );
     }
 
-    Dictionary { answers, allowed }
+    Dictionary {
+        word_len,
+        answers,
+        allowed,
+    }
 }
 
 /// Parses one word per line, panicking on an empty or malformed list.
-fn parse_list(text: &'static str, source: &str) -> Vec<&'static str> {
+///
+/// `role` names the list in panic messages (`answers` or `allowed`).
+fn parse_list(text: &'static str, word_len: usize, role: &str) -> Vec<&'static str> {
     let words: Vec<&'static str> = text.lines().collect();
-    assert!(!words.is_empty(), "{source} must not be empty");
+    assert!(
+        !words.is_empty(),
+        "the {word_len}-letter {role} list must not be empty"
+    );
     for word in &words {
         assert!(
-            is_five_lowercase_letters(word),
-            "{source} contains an invalid word: {word:?}"
+            is_lowercase_letters(word, word_len),
+            "the {word_len}-letter {role} list contains an invalid word: {word:?}"
         );
     }
     words
 }
 
-fn is_five_lowercase_letters(word: &str) -> bool {
-    word.len() == WORD_LEN && word.bytes().all(|byte| byte.is_ascii_lowercase())
+fn is_lowercase_letters(word: &str, word_len: usize) -> bool {
+    word.len() == word_len && word.bytes().all(|byte| byte.is_ascii_lowercase())
 }
 
-/// Whether `word` may be submitted as a guess.
+/// Whether `word` may be submitted as a guess in a game of size `word_len`.
 ///
-/// Only words from the embedded allowed list are accepted, which also keeps
-/// out wrong-length and non-alphabetic input.
-pub fn is_valid_guess(word: &str) -> bool {
-    word.len() == WORD_LEN && dictionary().allowed.contains(word)
+/// Only words from that size's embedded allowed list are accepted, which also
+/// keeps out wrong-length and non-alphabetic input.
+pub fn is_valid_guess(word: &str, word_len: usize) -> bool {
+    word.len() == word_len && dictionary(word_len).allowed.contains(word)
 }
 
-/// Draws a random answer from the embedded answer list.
-pub fn random_answer() -> Answer {
-    draw_answer(random_seed())
+/// Draws a random answer from the embedded answer list of size `word_len`.
+pub fn random_answer(word_len: usize) -> Answer {
+    draw_answer(random_seed(), word_len)
 }
 
 /// Deterministic core of [`random_answer`], used by tests to draw with a
 /// fixed seed.
-fn draw_answer(seed: u64) -> Answer {
-    let answers = &dictionary().answers;
+fn draw_answer(seed: u64, word_len: usize) -> Answer {
+    let answers = &dictionary(word_len).answers;
     let index = (xorshift64star(seed) % answers.len() as u64) as usize;
     Answer::new(answers[index]).expect("embedded answers were validated")
 }
@@ -116,60 +175,78 @@ mod tests {
     use super::*;
 
     #[test]
-    fn both_lists_are_non_empty() {
-        let dictionary = dictionary();
+    fn every_size_has_non_empty_lists() {
+        for &(word_len, _, _) in &EMBEDDED {
+            let dictionary = dictionary(word_len);
 
-        assert!(!dictionary.answers.is_empty());
-        assert!(!dictionary.allowed.is_empty());
-    }
-
-    #[test]
-    fn every_word_is_five_lowercase_letters() {
-        for word in ANSWERS.lines() {
             assert!(
-                is_five_lowercase_letters(word),
-                "invalid answer word: {word:?}"
+                !dictionary.answers.is_empty(),
+                "size {word_len} has no answers"
             );
-        }
-        for word in ALLOWED.lines() {
             assert!(
-                is_five_lowercase_letters(word),
-                "invalid allowed word: {word:?}"
+                !dictionary.allowed.is_empty(),
+                "size {word_len} has no allowed words"
             );
         }
     }
 
     #[test]
-    fn every_answer_is_an_allowed_guess() {
-        let dictionary = dictionary();
-
-        for answer in &dictionary.answers {
-            assert!(
-                dictionary.allowed.contains(answer),
-                "answer {answer:?} is not an allowed guess"
-            );
+    fn every_word_has_its_list_length_and_is_lowercase() {
+        for &(word_len, answers, allowed) in &EMBEDDED {
+            for word in answers.lines() {
+                assert!(
+                    is_lowercase_letters(word, word_len),
+                    "size {word_len} invalid answer word: {word:?}"
+                );
+            }
+            for word in allowed.lines() {
+                assert!(
+                    is_lowercase_letters(word, word_len),
+                    "size {word_len} invalid allowed word: {word:?}"
+                );
+            }
         }
     }
 
     #[test]
-    fn drawn_answer_comes_from_answer_list() {
-        let dictionary = dictionary();
+    fn every_answer_is_an_allowed_guess_at_its_size() {
+        for &(word_len, _, _) in &EMBEDDED {
+            let dictionary = dictionary(word_len);
 
-        for seed in 0..256 {
-            let answer = draw_answer(seed);
-            assert!(
-                dictionary.answers.contains(&answer.as_str()),
-                "drawn answer {:?} is not in the answer list",
-                answer.as_str()
-            );
-            assert!(is_valid_guess(answer.as_str()));
+            for answer in &dictionary.answers {
+                assert!(
+                    dictionary.allowed.contains(answer),
+                    "size {word_len}: answer {answer:?} is not an allowed guess"
+                );
+            }
         }
     }
 
     #[test]
-    fn is_valid_guess_rejects_non_words() {
-        assert!(is_valid_guess("cigar"));
-        assert!(!is_valid_guess("abcdef"));
-        assert!(!is_valid_guess("zzzzz"));
+    fn drawn_answer_comes_from_the_list_of_its_size() {
+        for &(word_len, _, _) in &EMBEDDED {
+            let dictionary = dictionary(word_len);
+
+            for seed in 0..64 {
+                let answer = draw_answer(seed, word_len);
+                assert_eq!(answer.len(), word_len);
+                assert!(
+                    dictionary.answers.contains(&answer.as_str()),
+                    "size {word_len}: drawn answer {:?} is not in the answer list",
+                    answer.as_str()
+                );
+                assert!(is_valid_guess(answer.as_str(), word_len));
+            }
+        }
+    }
+
+    #[test]
+    fn is_valid_guess_rejects_non_words_and_wrong_sizes() {
+        assert!(is_valid_guess("cigar", 5));
+        assert!(!is_valid_guess("cigar", 6));
+        assert!(!is_valid_guess("abcdef", 5));
+        assert!(!is_valid_guess("zzzzz", 5));
+        assert!(is_valid_guess("cat", 3));
+        assert!(!is_valid_guess("cat", 4));
     }
 }

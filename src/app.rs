@@ -5,7 +5,9 @@
 //! they can be unit-tested without a terminal; the UI only renders the
 //! resulting state and the event loop only translates keys into these calls.
 
-use crate::game::{Answer, Game, GameError, GameState, WORD_LEN};
+use crate::game::{
+    Answer, Game, GameError, GameState, DEFAULT_WORD_LEN, MAX_WORD_LEN, MIN_WORD_LEN,
+};
 use crate::words;
 
 /// Message shown when the submitted word is too short.
@@ -83,25 +85,32 @@ pub struct App {
     screen: Screen,
     /// Index into [`MenuEntry::ALL`]; only mutated by the select methods.
     menu_selection: usize,
+    /// Number of letters per word for the next game, chosen on the menu.
+    word_size: usize,
 }
 
 impl App {
     /// Starts a new game with a randomly drawn answer and opens on the menu.
     pub fn new() -> Self {
-        let mut app = Self::with_answer(words::random_answer());
+        let mut app = Self::with_answer(words::random_answer(DEFAULT_WORD_LEN));
         app.screen = Screen::Menu;
         app
     }
 
     /// Starts a new game with a fixed answer, opening straight onto the game
     /// screen, for tests and deterministic setups.
+    ///
+    /// The app's word size is set to the answer's length, so a following
+    /// [`App::new_game`] draws an answer of the same size.
     pub fn with_answer(answer: Answer) -> Self {
+        let word_size = answer.len();
         Self {
             game: Game::new(answer),
             typed: String::new(),
             message: None,
             screen: Screen::Game,
             menu_selection: 0,
+            word_size,
         }
     }
 
@@ -110,12 +119,13 @@ impl App {
         &self.game
     }
 
-    /// Starts a fresh game with a newly drawn answer.
+    /// Starts a fresh game with a newly drawn answer of the current word
+    /// size.
     ///
     /// The board, the typed word, and the message line are reset, so the app
     /// looks exactly as it does right after startup.
     pub fn new_game(&mut self) {
-        self.game = Game::new(words::random_answer());
+        self.game = Game::new(words::random_answer(self.word_size));
         self.typed.clear();
         self.message = None;
     }
@@ -139,6 +149,35 @@ impl App {
     /// Moves the menu cursor down, wrapping from the last entry to the first.
     pub fn select_next_menu_entry(&mut self) {
         self.menu_selection = (self.menu_selection + 1) % MenuEntry::ALL.len();
+    }
+
+    /// The number of letters per word the next game will use.
+    pub fn word_size(&self) -> usize {
+        self.word_size
+    }
+
+    /// Shrinks the word size shown on the Start game entry by one letter.
+    ///
+    /// The size clamps at [`MIN_WORD_LEN`]. The size keys only act while the
+    /// menu cursor rests on Start game, so other entries ignore them.
+    pub fn decrease_word_size(&mut self) {
+        self.adjust_word_size(-1);
+    }
+
+    /// Grows the word size shown on the Start game entry by one letter.
+    ///
+    /// The size clamps at [`MAX_WORD_LEN`]. The size keys only act while the
+    /// menu cursor rests on Start game, so other entries ignore them.
+    pub fn increase_word_size(&mut self) {
+        self.adjust_word_size(1);
+    }
+
+    fn adjust_word_size(&mut self, delta: isize) {
+        if self.screen != Screen::Menu || self.menu_selection() != MenuEntry::StartGame {
+            return;
+        }
+        self.word_size = (self.word_size as isize + delta)
+            .clamp(MIN_WORD_LEN as isize, MAX_WORD_LEN as isize) as usize;
     }
 
     /// Runs the menu entry under the cursor; returns `true` when the app
@@ -179,13 +218,14 @@ impl App {
 
     /// Appends a letter to the word being typed.
     ///
-    /// Non-alphabetic keys and overflow beyond [`WORD_LEN`] are ignored. Input
-    /// only acts while the game is still being played, so a finished game keeps
-    /// its end-state message on screen. Typing clears any stale message.
+    /// Non-alphabetic keys and overflow beyond the game's word size are
+    /// ignored. Input only acts while the game is still being played, so a
+    /// finished game keeps its end-state message on screen. Typing clears any
+    /// stale message.
     pub fn input_letter(&mut self, letter: char) {
         if self.game.state() != GameState::Playing
             || !letter.is_ascii_alphabetic()
-            || self.typed.len() >= WORD_LEN
+            || self.typed.len() >= self.game.word_len()
         {
             return;
         }
@@ -217,12 +257,12 @@ impl App {
             return;
         }
 
-        if self.typed.len() < WORD_LEN {
+        if self.typed.len() < self.game.word_len() {
             self.message = Some(TOO_SHORT_MESSAGE.to_string());
             return;
         }
 
-        if !words::is_valid_guess(&self.typed) {
+        if !words::is_valid_guess(&self.typed, self.game.word_len()) {
             self.message = Some(UNKNOWN_WORD_MESSAGE.to_string());
             return;
         }
@@ -241,7 +281,7 @@ impl App {
                 };
             }
             // Unreachable: the checks above guarantee a playing game and a
-            // five-letter valid word. Restore the buffer so no input is lost.
+            // word-length valid word. Restore the buffer so no input is lost.
             Err(GameError::GameOver) => {
                 self.typed = word;
                 self.message = Some(self.lost_message());
@@ -269,7 +309,7 @@ mod tests {
     use crate::game::MAX_ROUNDS;
 
     fn app_with(answer: &str) -> App {
-        App::with_answer(Answer::new(answer).expect("test answer is a five-letter word"))
+        App::with_answer(Answer::new(answer).expect("test answer is a supported word"))
     }
 
     fn type_word(app: &mut App, word: &str) {
@@ -458,7 +498,7 @@ mod tests {
 
         let answer = app.game().answer().as_str().to_string();
         assert!(
-            words::is_valid_guess(&answer),
+            words::is_valid_guess(&answer, app.game().word_len()),
             "drawn answer {answer:?} is not a valid guess"
         );
 
@@ -503,6 +543,60 @@ mod tests {
 
         app.select_next_menu_entry();
         assert_eq!(app.menu_selection(), MenuEntry::StartGame);
+    }
+
+    #[test]
+    fn word_size_changes_only_while_start_game_is_hovered() {
+        let mut app = app_with("crane");
+        app.open_menu();
+        assert_eq!(app.word_size(), 5);
+
+        app.increase_word_size();
+        assert_eq!(app.word_size(), 6);
+        app.decrease_word_size();
+        app.decrease_word_size();
+        assert_eq!(app.word_size(), 4);
+
+        app.select_next_menu_entry();
+        app.increase_word_size();
+        assert_eq!(app.word_size(), 4, "other entries ignore the size keys");
+    }
+
+    #[test]
+    fn word_size_clamps_at_the_bounds() {
+        let mut app = app_with("crane");
+        app.open_menu();
+
+        for _ in 0..10 {
+            app.increase_word_size();
+        }
+        assert_eq!(app.word_size(), MAX_WORD_LEN);
+
+        for _ in 0..20 {
+            app.decrease_word_size();
+        }
+        assert_eq!(app.word_size(), MIN_WORD_LEN);
+    }
+
+    #[test]
+    fn starting_a_game_uses_the_selected_word_size() {
+        let mut app = app_with("crane");
+        app.open_menu();
+        for _ in 0..3 {
+            app.increase_word_size();
+        }
+        assert_eq!(app.word_size(), MAX_WORD_LEN);
+
+        assert!(!app.activate_menu_entry());
+
+        assert_eq!(app.screen(), Screen::Game);
+        assert_eq!(app.game().word_len(), MAX_WORD_LEN);
+
+        let answer = app.game().answer().as_str().to_string();
+        assert_eq!(answer.len(), MAX_WORD_LEN);
+        type_word(&mut app, &answer);
+        app.submit();
+        assert_eq!(app.game().state(), GameState::Won);
     }
 
     #[test]

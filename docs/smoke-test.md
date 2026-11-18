@@ -15,11 +15,14 @@ if you see anything else.
 ## 1. Fresh run
 
 1. Run `cargo run`.
-2. Expect the alternate screen to open with a centered 6×5 board of dimmed
-   placeholder squares (one square per remaining guess), an empty message line
-   above it, and `Esc: menu` in the bottom-right corner (`q to quit` appears
-   there only once the game has ended).
-3. Expect no shell text or previous screen contents to show through, and no
+2. Expect the alternate screen to open on the main menu: the `WORDLE` title and
+   the entries `Start game (5 letters)`, `Credits`, `Repository`, `Quit`, with
+   Start game highlighted, plus the key hint at the bottom.
+3. Press Enter: expect a centered 6×5 board of dimmed placeholder squares (one
+   square per remaining guess), an empty message line above it, and `Esc: menu`
+   in the bottom-right corner (`q to quit` appears there only once the game has
+   ended).
+4. Expect no shell text or previous screen contents to show through, and no
    cursor blinking over the board (the app hides it while drawing).
 
 ## 2. Invalid guesses are rejected
@@ -43,9 +46,9 @@ if you see anything else.
 
 ## 4. Win
 
-1. Keep submitting valid five-letter guesses, using the colors to converge on
-   the answer (green = right letter in the right place).
-2. Once all five tiles in a row are green, expect the message
+1. Keep submitting valid guesses, using the colors to converge on the
+   answer (green = right letter in the right place).
+2. Once all tiles in a row are green, expect the message
    `You won! press n for a new game` and the game to stop accepting letters.
 3. If six guesses are used up first, restart from section 1 and try again.
 
@@ -115,3 +118,32 @@ guess `crane`. Revert the edit afterwards (`git checkout src/app.rs`).
 5. Expect a non-zero exit status (`echo $?` reports `101`).
 6. Remove the temporary `panic!` line and confirm the tree is clean
    (`git status`) and that `cargo build` still succeeds without warnings.
+
+## 11. Word size selection
+
+1. Run `cargo run` and stop on the menu. Expect `Start game (5 letters)` as the
+   highlighted first entry and the hint `↑/↓ select · ←/→ word size · Enter
+   confirm · q quit`.
+2. Press Right twice: expect the entry to read `Start game (7 letters)` and the
+   app to stay on the menu. Press Left once: expect `Start game (6 letters)`.
+3. Press Left repeatedly: the size stops at `Start game (3 letters)` and does
+   not wrap below it.
+4. Press Right repeatedly: the size stops at `Start game (8 letters)` and does
+   not wrap above it.
+5. Press Down to hover Credits, then Right: expect the Credits entry to stay
+   highlighted and no size change. Press Up to return to Start game.
+6. Select 4 letters and press Enter: expect a centered 4-wide, 6-row board of
+   dimmed placeholders (a 4-letter game).
+7. Press Enter with an empty buffer: expect `Not enough letters`. Type `qqqq`
+   and press Enter: expect `Not in word list`.
+8. Submit six valid four-letter guesses (e.g. `that`, `this`, `with`, `from`,
+   `have`, `more`): each must be accepted onto the board, and after the sixth
+   expect either `You won! press n for a new game` or `The word was <ANSWER>;
+   press n for a new game`.
+9. Press `n`: expect a fresh 4-wide, 6-row board.
+10. Press Esc, then select 8 letters and press Enter: expect a centered 8-wide
+    board. Type eight letters (`qqqqqqqq`) and press Enter: expect `Not in word
+    list` after accepting all eight characters, proving the input buffer tracks
+    the selected size.
+11. Press Esc: expect the menu entry to still read `Start game (8 letters)`.
+    Press `q`: expect the app to quit cleanly (exit status 0).
