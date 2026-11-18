@@ -13,4 +13,5 @@ Domain vocabulary for the terminal Wordle game. Use these terms in issues, tests
 - **Game state** — `Playing → Won | Lost`. Won: a guess evaluates all-Correct. Lost: 6 rounds pass without a win.
 - **Screen** — which view the TUI shows: **Menu** (startup), **Game**, **Credits**, or **Repository**. `Esc` leaves the game and the info screens for the menu.
 - **Menu** — the startup screen's selectable entries: Start game, Credits, Repository, Quit. The cursor wraps; Start game always begins a fresh game.
+- **Keyboard** — the QWERTY rows under the board; each key shows the best tile state seen for that letter across played rounds (Correct > Present > Absent). Unguessed keys stay plain.
 - **App state** — the TUI model: game state plus the word currently being typed, a transient message line (e.g. "not a valid word"), the screen being shown, and the menu cursor.

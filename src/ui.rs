@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::app::{App, MenuEntry, Screen};
-use crate::game::{TileState, MAX_ROUNDS, WORD_LEN};
+use crate::game::{keyboard_index, TileState, MAX_ROUNDS, WORD_LEN};
 
 /// Width of one tile cell.
 const TILE_WIDTH: u16 = 3;
@@ -22,6 +22,11 @@ const ROW_GAP: u16 = 1;
 const BOARD_WIDTH: u16 = WORD_LEN as u16 * TILE_WIDTH + (WORD_LEN as u16 - 1) * TILE_GAP;
 /// Total height of the 6×5 board in rows.
 const BOARD_HEIGHT: u16 = MAX_ROUNDS as u16 * TILE_HEIGHT + (MAX_ROUNDS as u16 - 1) * ROW_GAP;
+
+/// Rows of the on-screen keyboard, top to bottom.
+const KEYBOARD_ROWS: [&str; 3] = ["QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"];
+/// Height of the keyboard in rows.
+const KEYBOARD_HEIGHT: u16 = KEYBOARD_ROWS.len() as u16;
 
 /// Width of the menu block in columns.
 const MENU_WIDTH: u16 = 10;
@@ -110,11 +115,12 @@ fn render_text_screen(frame: &mut Frame, text: &str, hint: &str, area: Rect) {
     );
 }
 
-/// Renders the game screen: message line, board, and key hint.
+/// Renders the game screen: message line, board, keyboard, and key hint.
 fn render_game(frame: &mut Frame, app: &App, area: Rect) {
-    let [message_area, board_area, hint_area] = Layout::vertical([
+    let [message_area, board_area, keyboard_area, hint_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
+        Constraint::Length(KEYBOARD_HEIGHT),
         Constraint::Length(1),
     ])
     .areas(area);
@@ -127,7 +133,12 @@ fn render_game(frame: &mut Frame, app: &App, area: Rect) {
         message_area,
     );
 
-    render_board(frame, app, centered_within(board_area, BOARD_WIDTH, BOARD_HEIGHT));
+    render_board(
+        frame,
+        app,
+        centered_within(board_area, BOARD_WIDTH, BOARD_HEIGHT),
+    );
+    render_keyboard(frame, app, keyboard_area);
 
     frame.render_widget(
         Paragraph::new("Esc: menu · q to quit")
@@ -177,6 +188,39 @@ fn render_board(frame: &mut Frame, app: &App, grid: Rect) {
                 cell,
             );
         }
+    }
+}
+
+/// Renders the QWERTY keyboard below the board.
+///
+/// Each key is colored with the best tile state seen for its letter; keys
+/// that were never guessed keep the plain style.
+fn render_keyboard(frame: &mut Frame, app: &App, area: Rect) {
+    let states = app.game().keyboard_states();
+
+    for (row_index, row) in KEYBOARD_ROWS.iter().enumerate() {
+        let mut spans = Vec::with_capacity(row.len() * 2);
+        for (index, letter) in row.chars().enumerate() {
+            if index > 0 {
+                spans.push(Span::raw(" "));
+            }
+            let style = match states[keyboard_index(letter)] {
+                Some(state) => tile_style(state),
+                None => Style::default().fg(Color::White),
+            };
+            spans.push(Span::styled(format!(" {letter} "), style));
+        }
+
+        let width = row.len() as u16 * (TILE_WIDTH + TILE_GAP) - TILE_GAP;
+        let rect = Rect {
+            x: area.x + area.width.saturating_sub(width) / 2,
+            y: area.y + row_index as u16,
+            width: width.min(area.width),
+            height: 1,
+        }
+        .intersection(area);
+
+        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     }
 }
 

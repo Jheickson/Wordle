@@ -26,6 +26,25 @@ pub enum TileState {
 /// One tile state per position of a guess.
 pub type Evaluation = [TileState; WORD_LEN];
 
+/// Best tile state seen for each letter of the alphabet (index 0 = `A`), or
+/// `None` when the letter was never guessed.
+pub type KeyboardStates = [Option<TileState>; 26];
+
+/// The position of `letter` in [`KeyboardStates`] (0 = `A`).
+pub fn keyboard_index(letter: char) -> usize {
+    letter.to_ascii_uppercase() as usize - 'A' as usize
+}
+
+/// Strength of a tile state when picking a keyboard key's color: a correct
+/// letter outranks a present one, which outranks an absent one.
+fn tile_state_rank(state: TileState) -> u8 {
+    match state {
+        TileState::Correct => 2,
+        TileState::Present => 1,
+        TileState::Absent => 0,
+    }
+}
+
 /// Error returned when constructing a word of the wrong length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WordError {
@@ -211,6 +230,28 @@ impl Board {
         self.rounds.len() == MAX_ROUNDS
     }
 
+    /// The best tile state seen for each letter across all played rounds.
+    ///
+    /// A letter keeps the strongest signal it ever produced, so a correct
+    /// guess outranks a present one, which outranks absent.
+    pub fn keyboard_states(&self) -> KeyboardStates {
+        let mut states = [None; 26];
+        for round in &self.rounds {
+            for (position, letter) in round.guess.word.chars().enumerate() {
+                let index = keyboard_index(letter);
+                let candidate = round.evaluation[position];
+                let covered = match states[index] {
+                    Some(seen) => tile_state_rank(seen) >= tile_state_rank(candidate),
+                    None => false,
+                };
+                if !covered {
+                    states[index] = Some(candidate);
+                }
+            }
+        }
+        states
+    }
+
     fn push(&mut self, round: Round) {
         debug_assert!(self.rounds.len() < MAX_ROUNDS);
         self.rounds.push(round);
@@ -264,6 +305,11 @@ impl Game {
     /// Number of rounds played so far.
     pub fn rounds_played(&self) -> usize {
         self.board.rounds_played()
+    }
+
+    /// The best tile state seen for each letter across all played rounds.
+    pub fn keyboard_states(&self) -> KeyboardStates {
+        self.board.keyboard_states()
     }
 
     /// Submits a five-letter guess.
@@ -442,5 +488,59 @@ mod tests {
         assert_eq!(game.submit_guess("cigar"), Err(GameError::GameOver));
         assert_eq!(game.rounds_played(), 1);
         assert_eq!(game.board().round(0).unwrap().guess().as_str(), "cigar");
+    }
+
+    #[test]
+    fn keyboard_states_start_empty() {
+        let game = game("cigar");
+
+        assert_eq!(game.keyboard_states(), [None; 26]);
+    }
+
+    #[test]
+    fn keyboard_states_report_one_state_per_guessed_letter() {
+        let mut game = game("cigar");
+
+        // `crate` against `cigar`: c Correct, r and a Present, t and e Absent.
+        game.submit_guess("crate").unwrap();
+
+        let states = game.keyboard_states();
+        assert_eq!(states[keyboard_index('c')], Some(TileState::Correct));
+        assert_eq!(states[keyboard_index('r')], Some(TileState::Present));
+        assert_eq!(states[keyboard_index('a')], Some(TileState::Present));
+        assert_eq!(states[keyboard_index('t')], Some(TileState::Absent));
+        assert_eq!(states[keyboard_index('e')], Some(TileState::Absent));
+        assert_eq!(states[keyboard_index('z')], None);
+    }
+
+    #[test]
+    fn keyboard_states_upgrade_a_present_letter_to_correct() {
+        let mut game = game("cigar");
+        game.submit_guess("rainy").unwrap();
+        assert_eq!(
+            game.keyboard_states()[keyboard_index('i')],
+            Some(TileState::Present)
+        );
+
+        game.submit_guess("civic").unwrap();
+
+        assert_eq!(
+            game.keyboard_states()[keyboard_index('i')],
+            Some(TileState::Correct),
+            "a correct letter outranks an earlier present one"
+        );
+    }
+
+    #[test]
+    fn keyboard_states_keep_a_correct_letter_over_its_absent_duplicate() {
+        let mut game = game("cigar");
+
+        // The first `i` is Correct; the rest of the `i`s have no occurrence
+        // left, so they are Absent. The keyboard keeps the strongest signal.
+        game.submit_guess("riiii").unwrap();
+
+        let states = game.keyboard_states();
+        assert_eq!(states[keyboard_index('i')], Some(TileState::Correct));
+        assert_eq!(states[keyboard_index('r')], Some(TileState::Present));
     }
 }
