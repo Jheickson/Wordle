@@ -1,6 +1,6 @@
 use std::io::Result;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::app::App;
 use crate::game::GameState;
@@ -24,6 +24,9 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     let finished = app.game().state() != GameState::Playing;
 
     match key.code {
+        // Raw mode delivers Ctrl-C as a key event rather than SIGINT, so the
+        // quit must be handled here. Plain `c` still types a letter below.
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return true,
         KeyCode::Char('q') => return true,
         // `n` and Enter replay only once the game ended; while playing they
         // keep their meaning of letter and submitted guess.
@@ -39,7 +42,6 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::KeyModifiers;
 
     use crate::game::{Answer, MAX_ROUNDS};
 
@@ -106,6 +108,36 @@ mod tests {
         let mut app = app();
 
         assert!(handle_key(&mut app, key(KeyCode::Char('q'))));
+    }
+
+    #[test]
+    fn ctrl_c_asks_to_quit_while_playing() {
+        let mut app = app();
+
+        assert!(handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+        ));
+        assert_eq!(app.typed(), "");
+    }
+
+    #[test]
+    fn ctrl_c_asks_to_quit_after_the_game_ended() {
+        let mut app = app();
+        win(&mut app);
+
+        assert!(handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+        ));
+    }
+
+    #[test]
+    fn plain_c_is_a_typed_letter() {
+        let mut app = app();
+
+        assert!(!handle_key(&mut app, key(KeyCode::Char('c'))));
+        assert_eq!(app.typed(), "c");
     }
 
     #[test]
