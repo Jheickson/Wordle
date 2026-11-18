@@ -1,8 +1,10 @@
 mod app;
-mod game;
-mod words;
 mod event;
+// `Game::answer` stays unread until the loss reveal in issue #8.
+#[allow(dead_code)]
+mod game;
 mod ui;
+mod words;
 
 use std::io::Result;
 
@@ -17,7 +19,7 @@ fn main() -> Result<()> {
 }
 
 fn run(terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
-    let mut app = App::default();
+    let mut app = App::new();
     loop {
         terminal.draw(|frame| ui::render(frame, &app))?;
         if handle_events(&mut app)? {
