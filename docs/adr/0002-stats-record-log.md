@@ -38,7 +38,7 @@ dependency budget, and which games count.
 
 ## Consequences
 
-- The stats file grows by one short line per game (~50 bytes); re-deriving
+- The database grows by one short line per game (~50 bytes); re-deriving
   aggregates is trivial at these volumes and needs no cleanup pass.
 - Aggregates remain correct even if older app versions wrote the file, as long
   as they used a compatible header.

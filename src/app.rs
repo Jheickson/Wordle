@@ -126,7 +126,7 @@ impl App {
     /// The app's word size is set to the answer's length and its round limit
     /// to [`DEFAULT_ROUNDS`], so a following [`App::new_game`] draws a game
     /// with the same settings. Stats start empty and stay in memory: no
-    /// stats file is read or written because [`App::new`] is the only
+    /// database is read or written because [`App::new`] is the only
     /// constructor that opens one.
     pub fn with_answer(answer: Answer) -> Self {
         let word_size = answer.len();
