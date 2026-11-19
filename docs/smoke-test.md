@@ -175,3 +175,24 @@ guess `crane`. Revert the edit afterwards (`git checkout src/app.rs`).
    row at 80×24).
 9. Press Esc: expect `Start game (5 letters, 15 guesses)`. Press `q`: expect a
    clean exit (status 0).
+
+## 13. Terminal-size responsiveness
+
+Component sizes derive from the terminal: tiles step through 3×1, 5×2, and 7×3
+cells (never smaller, never larger), keyboard keys grow with the leftover
+height up to 3 rows, and the menu shows a block-letter `WORDLE` title once the
+screen has room for it. The board and its components stay centered.
+
+1. Run `cargo run` in an 80×24 terminal and start a 5-letter game: expect a
+   board of five 5×2 tiles per row with 1-cell gaps, 3-wide keyboard keys, and
+   no overlap.
+2. Resize the terminal to roughly 120×40 without quitting: expect the tiles to
+   grow to 7×3 and the keyboard keys to grow to 7 wide by 3 tall; the layout
+   fills the new space, nothing overlaps, and no stale cells remain.
+3. Resize to roughly 200×50: expect the tiles to stay at the 7×3 cap with even
+   margins, and the menu (press Esc) to show the block-letter `WORDLE` title at
+   double size with the entries as spaced selection bars.
+4. Resize back to 80×24: expect the compact layout again, still playable.
+5. Set 8 letters and 15 guesses on the menu and enter the game at 80×24:
+   expect 3×1 tiles with the row gaps collapsed, the keyboard below the board,
+   and `Esc: menu` visible; a submitted guess must land on row 1.
