@@ -11,13 +11,18 @@ if you see anything else.
 - `cargo build` succeeds.
 - Unless a step says otherwise, start the app with `cargo run` and quit it before
   moving to the next section.
+- Stats persist in `$XDG_DATA_HOME/wordle/stats` (default
+  `~/.local/share/wordle/stats`). For a clean slate, remove that file or run
+  with `XDG_DATA_HOME` pointing at a scratch directory, e.g.
+  `XDG_DATA_HOME=/tmp/wordle-smoke cargo run`.
 
 ## 1. Fresh run
 
 1. Run `cargo run`.
 2. Expect the alternate screen to open on the main menu: the `WORDLE` title and
-   the entries `Start game (5 letters, 6 guesses)`, `Credits`, `Repository`,
-   `Quit`, with Start game highlighted, plus the key hint at the bottom.
+   the entries `Start game (5 letters, 6 guesses)`, `Stats`, `Credits`,
+   `Repository`, `Quit`, with Start game highlighted, plus the key hint at the
+   bottom.
 3. Press Enter: expect a centered 6×5 board of dimmed placeholder squares (one
    square per remaining guess), an empty message line above it, and `Esc: menu`
    in the bottom-right corner (`q to quit` appears there only once the game has
@@ -131,8 +136,8 @@ guess `crane`. Revert the edit afterwards (`git checkout src/app.rs`).
    and does not wrap below it.
 4. Press Right repeatedly: the size stops at `Start game (8 letters, 6
    guesses)` and does not wrap above it.
-5. Press Down to hover Credits, then Right: expect the Credits entry to stay
-   highlighted and no size change. Press Up to return to Start game.
+5. Press Down twice to hover Credits, then Right: expect the Credits entry to
+   stay highlighted and no size change. Press Up twice to return to Start game.
 6. Select 4 letters and press Enter: expect a centered 4-wide, 6-row board of
    dimmed placeholders (a 4-letter game).
 7. Press Enter with an empty buffer: expect `Not enough letters`. Type `zqxj`
@@ -158,8 +163,8 @@ guess `crane`. Revert the edit afterwards (`git checkout src/app.rs`).
    guesses)` and does not wrap above it.
 3. Press `-` repeatedly: the count stops at `Start game (5 letters, 1 guess)`
    and does not wrap below it.
-4. Press Down to hover Credits, then `+`: expect the Credits entry highlighted
-   and no count change. Press Up to return to Start game.
+4. Press Down twice to hover Credits, then `+`: expect the Credits entry
+   highlighted and no count change. Press Up twice to return to Start game.
 5. Set 2 guesses and press Enter: expect a 2-row, 5-wide board. Submit valid
    guesses until the message line shows `You won! press n for a new game` or
    `The word was <ANSWER>; press n for a new game`; it must appear after at
@@ -196,3 +201,32 @@ screen has room for it. The board and its components stay centered.
 5. Set 8 letters and 15 guesses on the menu and enter the game at 80×24:
    expect 3×1 tiles with the row gaps collapsed, the keyboard below the board,
    and `Esc: menu` visible; a submitted guess must land on row 1.
+
+## 14. Stats
+
+1. Start from a clean stats file (see Preconditions). Open the menu, press
+   Down once: expect the `Stats` entry highlighted, between Start game and
+   Credits. Press Enter: expect a `STATS` screen reading
+   `No games played yet: finish one to fill this in.` and the hint
+   `Esc: back · q quit`. Press Esc: expect the menu.
+2. Start a 3-letter game and submit six distinct valid guesses from
+   `assets/allowed-3.txt` (e.g. `aaa`, `aab`, `aac`, `aad`, `aae`, `aaf`).
+   Finish on a win or a loss. Expect the stats file to exist and hold the
+   header `wordle-stats v1` plus one `record` line ending in the answer.
+3. Press Esc, Down, Enter: expect `Played 1 · Won <0|1> · Lost <1|0> · Win rate
+   <0%|100%>`, `Streak`/`Best` values matching the outcome, a `By word size`
+   line reading `3 letters · 1 played · …`, and one `Recent games` line. A loss
+   line reads `LOST · the word was <ANSWER> · 3 letters · just now`; a win line
+   reads `WON in <n> · 3 letters · just now` and the `Guess distribution (wins)`
+   section appears above `By word size`.
+4. Quit with `q`, restart, and open Stats again: expect the same numbers — the
+   history survives a relaunch.
+5. Lose another game, then open Stats: expect `Played 2`, `Best` unchanged, and
+   `Streak 0`. Win two games in a row: expect `Streak 2`.
+6. Replace the stats file with garbage (`echo garbage >` its path) and restart:
+   expect the app to open normally and the Stats screen to show the
+   `No games played yet` placeholder instead of crashing.
+7. In an 80×12 terminal, open Stats with a populated history: expect the
+   headline and the guess distribution to fit without horizontal clipping, and
+   lower sections (`By word size`, `Recent games`) to be dropped whole rather
+   than half-drawn.

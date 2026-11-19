@@ -5,10 +5,14 @@
 //! they can be unit-tested without a terminal; the UI only renders the
 //! resulting state and the event loop only translates keys into these calls.
 
+use std::path::PathBuf;
+use std::time::SystemTime;
+
 use crate::game::{
     Answer, Game, GameError, GameState, DEFAULT_ROUNDS, DEFAULT_WORD_LEN, MAX_ROUNDS, MAX_WORD_LEN,
     MIN_ROUNDS, MIN_WORD_LEN,
 };
+use crate::stats::{self, GameRecord, Stats};
 use crate::words;
 
 /// Message shown when the submitted word is too short.
@@ -36,6 +40,8 @@ fn won_message() -> String {
 pub enum MenuEntry {
     /// Starts a fresh game.
     StartGame,
+    /// Shows the completed-game stats.
+    Stats,
     /// Shows who built the game.
     Credits,
     /// Shows where the source lives.
@@ -46,8 +52,9 @@ pub enum MenuEntry {
 
 impl MenuEntry {
     /// Every entry in display order.
-    pub const ALL: [MenuEntry; 4] = [
+    pub const ALL: [MenuEntry; 5] = [
         MenuEntry::StartGame,
+        MenuEntry::Stats,
         MenuEntry::Credits,
         MenuEntry::Repository,
         MenuEntry::Quit,
@@ -57,6 +64,7 @@ impl MenuEntry {
     pub fn title(self) -> &'static str {
         match self {
             MenuEntry::StartGame => "Start game",
+            MenuEntry::Stats => "Stats",
             MenuEntry::Credits => "Credits",
             MenuEntry::Repository => "Repository",
             MenuEntry::Quit => "Quit",
@@ -71,6 +79,8 @@ pub enum Screen {
     Menu,
     /// An in-progress game.
     Game,
+    /// The completed-game stats.
+    Stats,
     /// The credits text.
     Credits,
     /// The repository link.
@@ -90,6 +100,12 @@ pub struct App {
     word_size: usize,
     /// Number of rounds for the next game, chosen on the menu.
     max_rounds: usize,
+    /// Every completed game, loaded at startup.
+    stats: Stats,
+    /// Where completed games are persisted; `None` keeps them in memory only.
+    stats_path: Option<PathBuf>,
+    /// When the current game started, for its recorded duration.
+    game_started: SystemTime,
 }
 
 impl App {
@@ -97,6 +113,8 @@ impl App {
     pub fn new() -> Self {
         let mut app = Self::with_answer(words::random_answer(DEFAULT_WORD_LEN));
         app.screen = Screen::Menu;
+        app.stats = stats::load();
+        app.stats_path = Some(stats::default_path());
         app
     }
 
@@ -105,7 +123,9 @@ impl App {
     ///
     /// The app's word size is set to the answer's length and its round limit
     /// to [`DEFAULT_ROUNDS`], so a following [`App::new_game`] draws a game
-    /// with the same settings.
+    /// with the same settings. Stats start empty and stay in memory: no
+    /// stats file is read or written because [`App::new`] is the only
+    /// constructor that opens one.
     pub fn with_answer(answer: Answer) -> Self {
         let word_size = answer.len();
         Self {
@@ -116,6 +136,9 @@ impl App {
             menu_selection: 0,
             word_size,
             max_rounds: DEFAULT_ROUNDS,
+            stats: Stats::default(),
+            stats_path: None,
+            game_started: SystemTime::now(),
         }
     }
 
@@ -133,6 +156,12 @@ impl App {
         self.game = Game::new(words::random_answer(self.word_size), self.max_rounds);
         self.typed.clear();
         self.message = None;
+        self.game_started = SystemTime::now();
+    }
+
+    /// Every completed game and its aggregates.
+    pub fn stats(&self) -> &Stats {
+        &self.stats
     }
 
     /// The screen currently shown.
@@ -230,6 +259,7 @@ impl App {
                 self.new_game();
                 self.screen = Screen::Game;
             }
+            MenuEntry::Stats => self.screen = Screen::Stats,
             MenuEntry::Credits => self.screen = Screen::Credits,
             MenuEntry::Repository => self.screen = Screen::Repository,
             MenuEntry::Quit => return true,
@@ -315,8 +345,14 @@ impl App {
             Ok(()) => {
                 self.message = match self.game.state() {
                     GameState::Playing => None,
-                    GameState::Won => Some(won_message()),
-                    GameState::Lost => Some(self.lost_message()),
+                    GameState::Won => {
+                        self.record_finished_game(true);
+                        Some(won_message())
+                    }
+                    GameState::Lost => {
+                        self.record_finished_game(false);
+                        Some(self.lost_message())
+                    }
                 };
             }
             // Unreachable: the checks above guarantee a playing game and a
@@ -339,6 +375,27 @@ impl App {
             "{LOST_MESSAGE_PREFIX} {}; {NEW_GAME_PROMPT}",
             self.game.answer().as_str().to_ascii_uppercase()
         )
+    }
+
+    /// Appends the just-finished game to [`Stats`] and persists the stats
+    /// when a stats file is in use.
+    fn record_finished_game(&mut self, won: bool) {
+        let duration_secs = SystemTime::now()
+            .duration_since(self.game_started)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or(0);
+        self.stats.push(GameRecord {
+            timestamp: stats::unix_now(),
+            word_size: self.game.word_len(),
+            round_limit: self.game.max_rounds(),
+            rounds_played: self.game.rounds_played(),
+            won,
+            duration_secs,
+            answer: self.game.answer().as_str().to_owned(),
+        });
+        if let Some(path) = &self.stats_path {
+            let _ = stats::save_to(&self.stats, path);
+        }
     }
 }
 
@@ -720,10 +777,15 @@ mod tests {
     }
 
     #[test]
-    fn activating_credits_and_repository_switch_screens() {
+    fn activating_stats_credits_and_repository_switch_screens() {
         let mut app = app_with("crane");
         app.open_menu();
 
+        app.select_next_menu_entry();
+        assert!(!app.activate_menu_entry());
+        assert_eq!(app.screen(), Screen::Stats);
+
+        app.open_menu();
         app.select_next_menu_entry();
         assert!(!app.activate_menu_entry());
         assert_eq!(app.screen(), Screen::Credits);
@@ -744,5 +806,61 @@ mod tests {
         app.select_previous_menu_entry();
 
         assert!(app.activate_menu_entry());
+    }
+
+    #[test]
+    fn a_won_game_is_recorded_in_the_stats() {
+        let mut app = app_with("crane");
+
+        type_word(&mut app, "crane");
+        app.submit();
+
+        assert_eq!(app.stats().games_played(), 1);
+        let record = app.stats().recent(1).next().unwrap();
+        assert!(record.won);
+        assert_eq!(record.word_size, 5);
+        assert_eq!(record.round_limit, DEFAULT_ROUNDS);
+        assert_eq!(record.rounds_played, 1);
+        assert_eq!(record.answer, "crane");
+    }
+
+    #[test]
+    fn a_lost_game_is_recorded_in_the_stats() {
+        let mut app = app_with("crane");
+
+        for word in ["slate", "brick", "fudge", "pylon", "whelp", "anvil"] {
+            type_word(&mut app, word);
+            app.submit();
+        }
+
+        assert_eq!(app.game().state(), GameState::Lost);
+        assert_eq!(app.stats().games_played(), 1);
+        assert!(!app.stats().recent(1).next().unwrap().won);
+    }
+
+    #[test]
+    fn unfinished_games_are_not_recorded() {
+        let mut app = app_with("crane");
+
+        type_word(&mut app, "slate");
+        app.submit();
+        app.open_menu();
+
+        assert_eq!(app.stats().games_played(), 0);
+    }
+
+    #[test]
+    fn completed_games_persist_to_the_stats_file() {
+        let path =
+            std::env::temp_dir().join(format!("wordle-app-stats-test-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut app = app_with("crane");
+        app.stats_path = Some(path.clone());
+
+        type_word(&mut app, "crane");
+        app.submit();
+
+        assert_eq!(stats::load_from(&path).games_played(), 1);
+        let _ = std::fs::remove_file(&path);
     }
 }

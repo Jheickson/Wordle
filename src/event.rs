@@ -56,7 +56,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
                 _ => {}
             }
         }
-        Screen::Credits | Screen::Repository => {
+        Screen::Credits | Screen::Repository | Screen::Stats => {
             match key.code {
                 KeyCode::Char('q') => return true,
                 KeyCode::Esc | KeyCode::Enter => app.open_menu(),
@@ -270,7 +270,7 @@ mod tests {
 
         assert_eq!(app.menu_selection(), MenuEntry::StartGame);
         handle_key(&mut app, key(KeyCode::Down));
-        assert_eq!(app.menu_selection(), MenuEntry::Credits);
+        assert_eq!(app.menu_selection(), MenuEntry::Stats);
         handle_key(&mut app, key(KeyCode::Up));
         assert_eq!(app.menu_selection(), MenuEntry::StartGame);
         handle_key(&mut app, key(KeyCode::Up));
@@ -283,7 +283,7 @@ mod tests {
         handle_key(&mut app, key(KeyCode::Esc));
 
         handle_key(&mut app, key(KeyCode::Char('j')));
-        assert_eq!(app.menu_selection(), MenuEntry::Credits);
+        assert_eq!(app.menu_selection(), MenuEntry::Stats);
         handle_key(&mut app, key(KeyCode::Char('k')));
         assert_eq!(app.menu_selection(), MenuEntry::StartGame);
     }
@@ -318,6 +318,7 @@ mod tests {
         let mut app = app();
         handle_key(&mut app, key(KeyCode::Esc));
         handle_key(&mut app, key(KeyCode::Down));
+        handle_key(&mut app, key(KeyCode::Down));
 
         assert!(!handle_key(&mut app, key(KeyCode::Enter)));
         assert_eq!(app.screen(), Screen::Credits);
@@ -332,9 +333,23 @@ mod tests {
         handle_key(&mut app, key(KeyCode::Esc));
         handle_key(&mut app, key(KeyCode::Down));
         handle_key(&mut app, key(KeyCode::Down));
+        handle_key(&mut app, key(KeyCode::Down));
 
         assert!(!handle_key(&mut app, key(KeyCode::Enter)));
         assert_eq!(app.screen(), Screen::Repository);
+
+        handle_key(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.screen(), Screen::Menu);
+    }
+
+    #[test]
+    fn enter_opens_the_stats_and_esc_returns_to_the_menu() {
+        let mut app = app();
+        handle_key(&mut app, key(KeyCode::Esc));
+        handle_key(&mut app, key(KeyCode::Down));
+
+        assert!(!handle_key(&mut app, key(KeyCode::Enter)));
+        assert_eq!(app.screen(), Screen::Stats);
 
         handle_key(&mut app, key(KeyCode::Esc));
         assert_eq!(app.screen(), Screen::Menu);
@@ -373,7 +388,7 @@ mod tests {
         let mut app = app();
         handle_key(&mut app, key(KeyCode::Esc));
         handle_key(&mut app, key(KeyCode::Down));
-        assert_eq!(app.menu_selection(), MenuEntry::Credits);
+        assert_eq!(app.menu_selection(), MenuEntry::Stats);
 
         handle_key(&mut app, key(KeyCode::Right));
         assert_eq!(app.word_size(), 5);
@@ -411,7 +426,7 @@ mod tests {
         let mut app = app();
         handle_key(&mut app, key(KeyCode::Esc));
         handle_key(&mut app, key(KeyCode::Down));
-        assert_eq!(app.menu_selection(), MenuEntry::Credits);
+        assert_eq!(app.menu_selection(), MenuEntry::Stats);
 
         handle_key(&mut app, key(KeyCode::Char('+')));
         assert_eq!(app.max_rounds(), DEFAULT_ROUNDS);

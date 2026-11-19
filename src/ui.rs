@@ -8,6 +8,7 @@ use ratatui::{
 
 use crate::app::{App, MenuEntry, Screen};
 use crate::game::{keyboard_index, GameState, TileState};
+use crate::stats::{self, GameRecord, Stats, RECENT_LIMIT};
 
 /// Smallest tile size, in columns×rows: the layout floor on cramped terminals.
 const MIN_TILE_WIDTH: u16 = 3;
@@ -122,6 +123,7 @@ const REPOSITORY_TEXT: &str = "Repository\n\nhttps://github.com/Jheickson/Wordle
 pub fn render(frame: &mut Frame, app: &App) {
     match app.screen() {
         Screen::Menu => render_menu(frame, app, frame.area()),
+        Screen::Stats => render_stats(frame, app, frame.area()),
         Screen::Credits => render_text_screen(frame, CREDITS_TEXT, "Esc: back", frame.area()),
         Screen::Repository => render_text_screen(frame, REPOSITORY_TEXT, "Esc: back", frame.area()),
         Screen::Game => render_game(frame, app, frame.area()),
@@ -296,6 +298,205 @@ fn render_text_screen(frame: &mut Frame, text: &str, hint: &str, area: Rect) {
             .style(Style::default().fg(Color::DarkGray)),
         hint_area,
     );
+}
+
+/// Longest bar of the guess distribution, in columns.
+const DISTRIBUTION_BAR_WIDTH: usize = 20;
+
+/// Renders the stats screen: headline totals, the guess distribution of wins,
+/// a per-word-size breakdown, and the latest games.
+///
+/// Sections follow in order of importance; one that does not fit the terminal
+/// is dropped whole, so a short screen keeps the headline instead of clipping
+/// a table halfway.
+fn render_stats(frame: &mut Frame, app: &App, area: Rect) {
+    let [content_area, hint_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+
+    let lines = stats_lines(app.stats(), content_area.height);
+    let width = lines.iter().map(Line::width).max().unwrap_or(0) as u16;
+    let height = lines.len() as u16;
+
+    frame.render_widget(
+        Paragraph::new(lines),
+        centered_within(content_area, width, height),
+    );
+    frame.render_widget(
+        Paragraph::new("Esc: back · q quit")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::DarkGray)),
+        hint_area,
+    );
+}
+
+/// Every line of the stats screen, at most `available` rows tall.
+fn stats_lines(stats: &Stats, available: u16) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "STATS",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::default(),
+    ];
+    if stats.games_played() == 0 {
+        lines.push(Line::from(
+            "No games played yet: finish one to fill this in.",
+        ));
+        return lines;
+    }
+
+    lines.extend(summary_lines(stats));
+    for section in [
+        distribution_lines(stats),
+        word_size_lines(stats),
+        recent_lines(stats),
+    ] {
+        if section.is_empty() {
+            continue;
+        }
+        // Each section is preceded by a blank separator row.
+        if lines.len() + section.len() + 1 > available as usize {
+            break;
+        }
+        lines.push(Line::default());
+        lines.extend(section);
+    }
+    lines
+}
+
+/// The headline totals: games, win rate, streaks, and win quality.
+fn summary_lines(stats: &Stats) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(format!(
+            "Played {} · Won {} · Lost {} · Win rate {}%",
+            stats.games_played(),
+            stats.wins(),
+            stats.losses(),
+            stats.win_rate().unwrap_or(0)
+        )),
+        Line::from(format!(
+            "Streak {} · Best {}",
+            stats.current_streak(),
+            stats.max_streak()
+        )),
+    ];
+    if let Some(average) = stats.average_win_guesses() {
+        let mut line = format!("Average guesses {average:.1}");
+        if let Some(fewest) = stats.fewest_guesses_win() {
+            line.push_str(&format!(" · fewest {}", fewest.rounds_played));
+        }
+        if let Some(fastest) = stats.fastest_win() {
+            line.push_str(&format!(
+                " · fastest {}",
+                duration_text(fastest.duration_secs)
+            ));
+        }
+        lines.push(Line::from(line));
+    }
+    lines
+}
+
+/// The wins counted per number of guesses, drawn as bars scaled to the
+/// largest bucket. Losses are not charted, matching the original game.
+fn distribution_lines(stats: &Stats) -> Vec<Line<'static>> {
+    let distribution = stats.win_distribution();
+    let Some(max) = distribution.iter().copied().max().filter(|&max| max > 0) else {
+        return Vec::new();
+    };
+    let last = distribution
+        .iter()
+        .rposition(|&count| count > 0)
+        .unwrap_or(0)
+        + 1;
+
+    let mut lines = vec![Line::from(Span::styled(
+        "Guess distribution (wins)",
+        Style::default().add_modifier(Modifier::BOLD),
+    ))];
+    for (index, &count) in distribution.iter().take(last).enumerate() {
+        let bar = if count == 0 {
+            String::new()
+        } else {
+            "█".repeat((count * DISTRIBUTION_BAR_WIDTH / max).max(1))
+        };
+        lines.push(Line::from(vec![
+            Span::raw(format!("{:>2} ", index + 1)),
+            Span::styled(bar, Style::default().fg(Color::Green)),
+            Span::raw(format!(" {count}")),
+        ]));
+    }
+    lines
+}
+
+/// One line per word size that has games: played, won, and win rate.
+fn word_size_lines(stats: &Stats) -> Vec<Line<'static>> {
+    let by_size = stats.by_word_size();
+    if by_size.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = vec![Line::from(Span::styled(
+        "By word size",
+        Style::default().add_modifier(Modifier::BOLD),
+    ))];
+    for (size, played, won) in by_size {
+        lines.push(Line::from(format!(
+            "{size} letters · {played} played · {won} won ({}%)",
+            won * 100 / played
+        )));
+    }
+    lines
+}
+
+/// The most recent games, latest first.
+fn recent_lines(stats: &Stats) -> Vec<Line<'static>> {
+    let now = stats::unix_now();
+    let recent: Vec<&GameRecord> = stats.recent(RECENT_LIMIT).collect();
+    if recent.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = vec![Line::from(Span::styled(
+        "Recent games",
+        Style::default().add_modifier(Modifier::BOLD),
+    ))];
+    for record in recent {
+        let outcome = if record.won {
+            format!("WON in {}", record.rounds_played)
+        } else {
+            format!(
+                "LOST · the word was {}",
+                record.answer.to_ascii_uppercase()
+            )
+        };
+        lines.push(Line::from(format!(
+            "{outcome} · {} letters · {}",
+            record.word_size,
+            time_ago(now.saturating_sub(record.timestamp))
+        )));
+    }
+    lines
+}
+
+/// A duration as `45s` or `2m 05s`.
+fn duration_text(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}m {:02}s", secs / 60, secs % 60)
+    }
+}
+
+/// A coarse age for a game played `secs` ago.
+fn time_ago(secs: u64) -> String {
+    match secs {
+        0..=59 => "just now".to_string(),
+        60..=3599 => format!("{}m ago", secs / 60),
+        3600..=86399 => format!("{}h ago", secs / 3600),
+        _ => format!("{}d ago", secs / 86400),
+    }
 }
 
 /// Renders the game screen: message line, board, keyboard, and key hint.
@@ -517,5 +718,75 @@ fn centered_within(area: Rect, width: u16, height: u16) -> Rect {
         y: area.y + (area.height - height) / 2,
         width,
         height,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stats::GameRecord;
+
+    fn record(won: bool, rounds_played: usize, word_size: usize) -> GameRecord {
+        GameRecord {
+            timestamp: stats::unix_now(),
+            word_size,
+            round_limit: 6,
+            rounds_played,
+            won,
+            duration_secs: 30,
+            answer: "a".repeat(word_size),
+        }
+    }
+
+    fn text(lines: &[Line]) -> String {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_history_without_wins_still_shows_the_breakdown_and_recent_games() {
+        let mut stats = Stats::default();
+        stats.push(record(false, 6, 5));
+
+        let rendered = text(&stats_lines(&stats, 40));
+        assert!(rendered.contains("Played 1"), "{rendered}");
+        assert!(rendered.contains("By word size"), "{rendered}");
+        assert!(rendered.contains("Recent games"), "{rendered}");
+    }
+
+    #[test]
+    fn wins_are_charted_by_guess_count() {
+        let mut stats = Stats::default();
+        stats.push(record(true, 3, 5));
+        stats.push(record(true, 3, 5));
+
+        let rendered = text(&stats_lines(&stats, 40));
+        assert!(rendered.contains("Guess distribution (wins)"), "{rendered}");
+        assert!(rendered.contains('█'), "{rendered}");
+    }
+
+    #[test]
+    fn a_short_screen_drops_whole_sections_instead_of_clipping() {
+        let mut stats = Stats::default();
+        stats.push(record(true, 3, 5));
+
+        let lines = stats_lines(&stats, 6);
+        assert!(lines.len() <= 6);
+        assert!(!text(&lines).contains("Recent games"));
+    }
+
+    #[test]
+    fn empty_stats_show_a_placeholder() {
+        let rendered = text(&stats_lines(&Stats::default(), 40));
+        assert!(rendered.contains("No games played yet"), "{rendered}");
+        assert!(!rendered.contains("Guess distribution"), "{rendered}");
     }
 }
