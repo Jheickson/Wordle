@@ -97,7 +97,28 @@ format. The Stats screen shows:
 A missing or unreadable database degrades to in-memory stats for the session —
 the app never crashes or overwrites a broken file.
 
-## Build and run
+## Install and run
+
+### With Nix
+
+The game is packaged as a Nix flake, so playing needs no Rust toolchain —
+just Nix with flakes enabled:
+
+```sh
+nix run github:Jheickson/Wordle   # play the latest release
+```
+
+From a checkout of the repository:
+
+```sh
+nix run .                # play
+nix build                # build; the binary lands in result/bin/wordle
+nix develop              # dev shell: cargo, clippy, rustfmt, rust-analyzer
+```
+
+The flake covers x86_64/aarch64 Linux and macOS.
+
+### From source
 
 Requires a Rust toolchain (edition 2021). SQLite is bundled through
 `rusqlite`, so no system SQLite is needed.
