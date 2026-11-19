@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-11-18)
+Accepted (2026-11-18). Storage format and location superseded by ADR 0003.
 
 ## Context
 

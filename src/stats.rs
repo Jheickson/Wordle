@@ -1,23 +1,90 @@
-//! Persistent record of completed games.
+//! Persistent record of completed games, stored in SQLite.
 //!
-//! [`GameRecord`] captures one finished game; [`Stats`] keeps every record and
-//! derives all aggregates (win rate, streaks, guess distribution) from them,
-//! so the stored data is never inconsistent with what the screens show.
-//! Records live in a plain-text file under the XDG data dir; a missing or
-//! corrupt file simply yields empty stats.
+//! [`GameRecord`] captures one finished game. [`Stats`] keeps every record in
+//! memory and derives all aggregates from them, while an optional [`Store`]
+//! persists each record to a SQLite database under the XDG data dir.
+//!
+//! Opening the database creates it, applies the schema (tracked in a `meta`
+//! table), and imports a legacy plain-text stats file once. A database that
+//! cannot be opened or is newer than this build falls back to in-memory stats:
+//! the session keeps working and nothing is corrupted.
 
-use std::fmt::Write;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use rusqlite::{params, Connection, OptionalExtension};
+
 use crate::game::{MAX_ROUNDS, MAX_WORD_LEN, MIN_ROUNDS, MIN_WORD_LEN};
 
-/// First line of the stats file; a file without it is treated as invalid.
-const FORMAT_HEADER: &str = "wordle-stats v1";
+/// Schema version this build expects in the `meta` table.
+const SCHEMA_VERSION: i64 = 1;
+
+/// File name of the pre-SQLite stats file, next to the database.
+const LEGACY_FILE_NAME: &str = "stats";
+
+/// First line of the legacy stats file; only files with it are imported.
+const LEGACY_HEADER: &str = "wordle-stats v1";
 
 /// Number of recent games the stats screen lists.
 pub const RECENT_LIMIT: usize = 5;
+
+/// Schema statement applied on every open; safe to repeat.
+const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS games (
+    id INTEGER PRIMARY KEY,
+    ended_at INTEGER NOT NULL,
+    word_size INTEGER NOT NULL,
+    round_limit INTEGER NOT NULL,
+    rounds_played INTEGER NOT NULL,
+    won INTEGER NOT NULL,
+    duration_secs INTEGER NOT NULL,
+    answer TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS games_won ON games(won);
+";
+
+/// Why a [`Stats`] database could not be opened or upgraded.
+#[derive(Debug)]
+pub enum StoreError {
+    /// Parent directories or the database file could not be reached.
+    Io(std::io::Error),
+    /// The database rejected the schema, the data, or the legacy import.
+    Sqlite(rusqlite::Error),
+    /// The database was written by a newer build with an unknown schema.
+    UnsupportedSchema(String),
+}
+
+impl fmt::Display for StoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => write!(f, "stats database I/O failed: {error}"),
+            Self::Sqlite(error) => write!(f, "stats database error: {error}"),
+            Self::UnsupportedSchema(version) => {
+                write!(f, "stats database schema {version} is newer than this build")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StoreError {}
+
+impl From<std::io::Error> for StoreError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<rusqlite::Error> for StoreError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Sqlite(error)
+    }
+}
 
 /// One completed game: a win, or a loss by exhausting the round limit.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,15 +120,34 @@ impl GameRecord {
     }
 }
 
-/// Every completed game, in the order they ended.
-#[derive(Debug, Default, PartialEq, Eq)]
+/// Every completed game, with a database backing it when one could be opened.
+///
+/// Aggregates are computed from the in-memory records, so the stats screen
+/// never waits on the database once startup has loaded it.
+#[derive(Debug, Default)]
 pub struct Stats {
     records: Vec<GameRecord>,
+    store: Option<Store>,
 }
 
 impl Stats {
-    /// Records a completed game.
+    /// Opens (creating it if needed) the database at `path` and loads every
+    /// stored game, importing a legacy text stats file on first creation.
+    pub fn open(path: &Path) -> Result<Self, StoreError> {
+        let store = Store::open(path)?;
+        let records = store.load()?;
+        Ok(Self {
+            records,
+            store: Some(store),
+        })
+    }
+
+    /// Records a completed game, appending it to the database when one is
+    /// open. A failed write keeps the game in memory for this session.
     pub fn push(&mut self, record: GameRecord) {
+        if let Some(store) = &self.store {
+            let _ = store.insert(&record);
+        }
         self.records.push(record);
     }
 
@@ -177,66 +263,166 @@ impl Stats {
     pub fn recent(&self, n: usize) -> impl Iterator<Item = &GameRecord> {
         self.records.iter().rev().take(n)
     }
+}
 
-    /// Parses stats from the file contents; an unreadable or wrongly headed
-    /// file yields empty stats, and invalid lines are dropped individually.
-    fn parse(text: &str) -> Self {
-        let mut lines = text.lines();
-        if lines.next() != Some(FORMAT_HEADER) {
-            return Self::default();
+/// The SQLite database behind [`Stats`].
+#[derive(Debug)]
+struct Store {
+    conn: Connection,
+}
+
+impl Store {
+    /// Opens or creates the database at `path`, applies the schema, and
+    /// upgrades or imports as needed.
+    fn open(path: &Path) -> Result<Self, StoreError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
         }
-        let mut stats = Self::default();
-        for line in lines {
-            if let Some(record) = Self::parse_record(line) {
-                stats.push(record);
+        let conn = Connection::open(path)?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.execute_batch(SCHEMA)?;
+        Self::upgrade(&conn, path)?;
+        Ok(Self { conn })
+    }
+
+    /// Sets up the schema version, importing a legacy text file on first use.
+    fn upgrade(conn: &Connection, path: &Path) -> Result<(), StoreError> {
+        let version: Option<String> = conn
+            .query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        match version {
+            None => {
+                import_legacy(conn, path)?;
+                conn.execute(
+                    "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
+                    params![SCHEMA_VERSION.to_string()],
+                )?;
+                Ok(())
             }
-        }
-        stats
-    }
-
-    /// Parses one `record` line, or `None` when it does not hold a valid game.
-    fn parse_record(line: &str) -> Option<GameRecord> {
-        let mut fields = line.split_whitespace();
-        if fields.next()? != "record" {
-            return None;
-        }
-        let record = GameRecord {
-            timestamp: fields.next()?.parse().ok()?,
-            word_size: fields.next()?.parse().ok()?,
-            round_limit: fields.next()?.parse().ok()?,
-            rounds_played: fields.next()?.parse().ok()?,
-            won: match fields.next()? {
-                "won" => true,
-                "lost" => false,
-                _ => return None,
+            Some(version) => match version.parse::<i64>() {
+                Ok(found) if found == SCHEMA_VERSION => Ok(()),
+                _ => Err(StoreError::UnsupportedSchema(version)),
             },
-            duration_secs: fields.next()?.parse().ok()?,
-            answer: fields.next()?.to_owned(),
-        };
-        if fields.next().is_some() || !record.is_valid() {
-            return None;
         }
-        Some(record)
     }
 
-    /// The file's text: header line, then one line per game.
-    fn serialize(&self) -> String {
-        let mut text = format!("{FORMAT_HEADER}\n");
-        for r in &self.records {
-            let outcome = if r.won { "won" } else { "lost" };
-            let _ = writeln!(
-                text,
-                "record {} {} {} {} {} {} {}",
-                r.timestamp, r.word_size, r.round_limit, r.rounds_played, outcome,
-                r.duration_secs, r.answer
-            );
-        }
-        text
+    /// Appends one game.
+    fn insert(&self, record: &GameRecord) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO games
+                (ended_at, word_size, round_limit, rounds_played, won, duration_secs, answer)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                record.timestamp as i64,
+                record.word_size as i64,
+                record.round_limit as i64,
+                record.rounds_played as i64,
+                record.won as i64,
+                record.duration_secs as i64,
+                record.answer
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every stored game, oldest first.
+    fn load(&self) -> rusqlite::Result<Vec<GameRecord>> {
+        let mut statement = self.conn.prepare(
+            "SELECT ended_at, word_size, round_limit, rounds_played, won,
+                    duration_secs, answer
+             FROM games ORDER BY id",
+        )?;
+        let records = statement.query_map([], |row| {
+            Ok(GameRecord {
+                timestamp: row.get::<_, i64>(0)? as u64,
+                word_size: row.get::<_, i64>(1)? as usize,
+                round_limit: row.get::<_, i64>(2)? as usize,
+                rounds_played: row.get::<_, i64>(3)? as usize,
+                won: row.get::<_, i64>(4)? != 0,
+                duration_secs: row.get::<_, i64>(5)? as u64,
+                answer: row.get(6)?,
+            })
+        })?;
+        records.collect()
     }
 }
 
-/// Where the stats file lives: `$XDG_DATA_HOME/wordle/stats`, falling back to
-/// `~/.local/share/wordle/stats`.
+/// Imports a legacy plain-text stats file sitting next to the database, then
+/// renames it to `<name>.imported` so it is never imported twice.
+///
+/// Files without the legacy header are left untouched, so a future format is
+/// not silently absorbed.
+fn import_legacy(conn: &Connection, db_path: &Path) -> Result<(), StoreError> {
+    let legacy = db_path.with_file_name(LEGACY_FILE_NAME);
+    let Ok(text) = fs::read_to_string(&legacy) else {
+        return Ok(());
+    };
+    let Some(records) = parse_legacy(&text) else {
+        return Ok(());
+    };
+
+    let transaction = conn.unchecked_transaction()?;
+    for record in records {
+        transaction.execute(
+            "INSERT INTO games
+                (ended_at, word_size, round_limit, rounds_played, won, duration_secs, answer)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                record.timestamp as i64,
+                record.word_size as i64,
+                record.round_limit as i64,
+                record.rounds_played as i64,
+                record.won as i64,
+                record.duration_secs as i64,
+                record.answer
+            ],
+        )?;
+    }
+    transaction.commit()?;
+    fs::rename(&legacy, legacy.with_extension("imported"))?;
+    Ok(())
+}
+
+/// Parses a legacy stats file, or `None` when its header does not match.
+/// Invalid `record` lines are dropped individually.
+fn parse_legacy(text: &str) -> Option<Vec<GameRecord>> {
+    let mut lines = text.lines();
+    if lines.next() != Some(LEGACY_HEADER) {
+        return None;
+    }
+    Some(lines.filter_map(parse_legacy_record).collect())
+}
+
+/// Parses one legacy `record` line, or `None` when it does not hold a valid
+/// game.
+fn parse_legacy_record(line: &str) -> Option<GameRecord> {
+    let mut fields = line.split_whitespace();
+    if fields.next()? != "record" {
+        return None;
+    }
+    let record = GameRecord {
+        timestamp: fields.next()?.parse().ok()?,
+        word_size: fields.next()?.parse().ok()?,
+        round_limit: fields.next()?.parse().ok()?,
+        rounds_played: fields.next()?.parse().ok()?,
+        won: match fields.next()? {
+            "won" => true,
+            "lost" => false,
+            _ => return None,
+        },
+        duration_secs: fields.next()?.parse().ok()?,
+        answer: fields.next()?.to_owned(),
+    };
+    if fields.next().is_some() || !record.is_valid() {
+        return None;
+    }
+    Some(record)
+}
+
+/// Where the database lives: `$XDG_DATA_HOME/wordle/stats.db`, falling back
+/// to `~/.local/share/wordle/stats.db`.
 pub fn default_path() -> PathBuf {
     let data_home = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
@@ -244,28 +430,13 @@ pub fn default_path() -> PathBuf {
             std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
         })
         .unwrap_or_else(|| PathBuf::from(".local/share"));
-    data_home.join("wordle").join("stats")
+    data_home.join("wordle").join("stats.db")
 }
 
-/// Loads the stats from the default path; missing or corrupt files yield
-/// empty stats.
-pub fn load() -> Stats {
-    load_from(&default_path())
-}
-
-/// Loads the stats from `path`; missing or corrupt files yield empty stats.
-pub fn load_from(path: &Path) -> Stats {
-    fs::read_to_string(path)
-        .map(|text| Stats::parse(&text))
-        .unwrap_or_default()
-}
-
-/// Saves the stats to `path`, creating parent directories.
-pub fn save_to(stats: &Stats, path: &Path) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, stats.serialize())
+/// Opens the database at the default path; on failure the caller gets an
+/// error it can turn into in-memory stats.
+pub fn open_default() -> Result<Stats, StoreError> {
+    Stats::open(&default_path())
 }
 
 /// Seconds elapsed since the Unix epoch.
@@ -280,14 +451,26 @@ pub fn unix_now() -> u64 {
 mod tests {
     use super::*;
 
-    /// A scratch file per test, named by test and process, cleaned up after.
-    fn scratch_path(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
+    /// A scratch database in a directory of its own, so the legacy file that
+    /// sits next to it cannot collide with another test's.
+    fn scratch_db(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
             "wordle-stats-test-{}-{name}",
             std::process::id()
         ));
-        let _ = std::fs::remove_file(&path);
-        path
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir.join("stats.db")
+    }
+
+    fn cleanup(path: &Path) {
+        if let Some(dir) = path.parent() {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    fn legacy_path(db_path: &Path) -> PathBuf {
+        db_path.with_file_name(LEGACY_FILE_NAME)
     }
 
     fn record(won: bool, rounds_played: usize, word_size: usize) -> GameRecord {
@@ -303,45 +486,81 @@ mod tests {
     }
 
     #[test]
-    fn save_and_load_round_trip() {
-        let path = scratch_path("round-trip");
-        let mut stats = Stats::default();
+    fn records_survive_a_reopen() {
+        let path = scratch_db("reopen");
+        let mut stats = Stats::open(&path).unwrap();
         stats.push(record(true, 3, 5));
         stats.push(record(false, 6, 4));
+        drop(stats);
 
-        save_to(&stats, &path).unwrap();
-        assert_eq!(load_from(&path), stats);
-        let _ = std::fs::remove_file(&path);
+        let reopened = Stats::open(&path).unwrap();
+        assert_eq!(reopened.games_played(), 2);
+        assert_eq!(reopened.wins(), 1);
+        assert_eq!(reopened.recent(2).next().unwrap().answer, "aaaa");
+        cleanup(&path);
     }
 
     #[test]
-    fn missing_file_yields_empty_stats() {
-        assert_eq!(load_from(Path::new("/nonexistent/wordle/stats")), Stats::default());
-    }
-
-    #[test]
-    fn bad_header_yields_empty_stats() {
-        let path = scratch_path("bad-header");
-        std::fs::write(&path, "garbage\nrecord 1 5 6 3 won 60 crane\n").unwrap();
-
-        assert_eq!(load_from(&path), Stats::default());
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn invalid_lines_are_dropped_but_valid_ones_kept() {
-        let path = scratch_path("bad-lines");
-        let good = "record 1700000000 5 6 3 won 60 crane";
-        std::fs::write(
-            &path,
-            format!("{FORMAT_HEADER}\nrecord 1 5 6 9 won 60 crane\nnope\n{good}\n"),
+    fn a_fresh_database_imports_the_legacy_text_file_once() {
+        let path = scratch_db("legacy");
+        let legacy = legacy_path(&path);
+        fs::write(
+            &legacy,
+            format!(
+                "{LEGACY_HEADER}\nrecord 1700000000 5 6 3 won 60 crane\nrecord 1 5 6 9 won 60 crane\n"
+            ),
         )
         .unwrap();
 
-        let stats = load_from(&path);
-        assert_eq!(stats.games_played(), 1);
-        assert!(stats.recent(1).next().unwrap().won);
-        let _ = std::fs::remove_file(&path);
+        let stats = Stats::open(&path).unwrap();
+        assert_eq!(stats.games_played(), 1, "invalid lines are dropped");
+        drop(stats);
+        assert!(!legacy.exists(), "the legacy file is renamed");
+        assert!(legacy.with_extension("imported").exists());
+
+        let reopened = Stats::open(&path).unwrap();
+        assert_eq!(reopened.games_played(), 1, "no second import");
+        let _ = fs::remove_file(legacy.with_extension("imported"));
+        cleanup(&path);
+    }
+
+    #[test]
+    fn a_legacy_file_without_the_header_is_left_alone() {
+        let path = scratch_db("no-header");
+        let legacy = legacy_path(&path);
+        fs::write(&legacy, "garbage\n").unwrap();
+
+        let stats = Stats::open(&path).unwrap();
+        assert_eq!(stats.games_played(), 0);
+        assert!(legacy.exists());
+        let _ = fs::remove_file(&legacy);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn a_corrupt_database_reports_an_error_instead_of_panicking() {
+        let path = scratch_db("corrupt");
+        fs::write(&path, b"definitely not a sqlite database").unwrap();
+
+        assert!(Stats::open(&path).is_err());
+        cleanup(&path);
+    }
+
+    #[test]
+    fn a_newer_schema_is_refused_rather_than_downgraded() {
+        let path = scratch_db("newer");
+        let stats = Stats::open(&path).unwrap();
+        drop(stats);
+        let conn = Connection::open(&path).unwrap();
+        conn.execute("UPDATE meta SET value = '99' WHERE key = 'schema_version'", [])
+            .unwrap();
+        drop(conn);
+
+        assert!(matches!(
+            Stats::open(&path),
+            Err(StoreError::UnsupportedSchema(version)) if version == "99"
+        ));
+        cleanup(&path);
     }
 
     #[test]

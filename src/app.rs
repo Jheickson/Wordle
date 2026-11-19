@@ -5,7 +5,6 @@
 //! they can be unit-tested without a terminal; the UI only renders the
 //! resulting state and the event loop only translates keys into these calls.
 
-use std::path::PathBuf;
 use std::time::SystemTime;
 
 use crate::game::{
@@ -102,19 +101,20 @@ pub struct App {
     max_rounds: usize,
     /// Every completed game, loaded at startup.
     stats: Stats,
-    /// Where completed games are persisted; `None` keeps them in memory only.
-    stats_path: Option<PathBuf>,
     /// When the current game started, for its recorded duration.
     game_started: SystemTime,
 }
 
 impl App {
     /// Starts a new game with a randomly drawn answer and opens on the menu.
+    ///
+    /// The stats database is opened at its default location; when it cannot be
+    /// opened (permissions, corruption, newer schema), the session keeps stats
+    /// in memory instead of failing to start.
     pub fn new() -> Self {
         let mut app = Self::with_answer(words::random_answer(DEFAULT_WORD_LEN));
         app.screen = Screen::Menu;
-        app.stats = stats::load();
-        app.stats_path = Some(stats::default_path());
+        app.stats = stats::open_default().unwrap_or_default();
         app
     }
 
@@ -137,7 +137,6 @@ impl App {
             word_size,
             max_rounds: DEFAULT_ROUNDS,
             stats: Stats::default(),
-            stats_path: None,
             game_started: SystemTime::now(),
         }
     }
@@ -377,8 +376,8 @@ impl App {
         )
     }
 
-    /// Appends the just-finished game to [`Stats`] and persists the stats
-    /// when a stats file is in use.
+    /// Appends the just-finished game to [`Stats`], which writes it to the
+    /// database when one is open.
     fn record_finished_game(&mut self, won: bool) {
         let duration_secs = SystemTime::now()
             .duration_since(self.game_started)
@@ -393,9 +392,6 @@ impl App {
             duration_secs,
             answer: self.game.answer().as_str().to_owned(),
         });
-        if let Some(path) = &self.stats_path {
-            let _ = stats::save_to(&self.stats, path);
-        }
     }
 }
 
@@ -850,17 +846,21 @@ mod tests {
     }
 
     #[test]
-    fn completed_games_persist_to_the_stats_file() {
+    fn completed_games_persist_to_the_stats_database() {
         let path =
-            std::env::temp_dir().join(format!("wordle-app-stats-test-{}", std::process::id()));
+            std::env::temp_dir().join(format!("wordle-app-stats-test-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let mut app = app_with("crane");
-        app.stats_path = Some(path.clone());
+        app.stats = Stats::open(&path).unwrap();
 
         type_word(&mut app, "crane");
         app.submit();
 
-        assert_eq!(stats::load_from(&path).games_played(), 1);
-        let _ = std::fs::remove_file(&path);
+        assert_eq!(Stats::open(&path).unwrap().games_played(), 1);
+        for suffix in ["", "-wal", "-shm"] {
+            let mut file = path.as_os_str().to_owned();
+            file.push(suffix);
+            let _ = std::fs::remove_file(std::path::PathBuf::from(file));
+        }
     }
 }

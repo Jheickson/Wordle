@@ -11,10 +11,10 @@ if you see anything else.
 - `cargo build` succeeds.
 - Unless a step says otherwise, start the app with `cargo run` and quit it before
   moving to the next section.
-- Stats persist in `$XDG_DATA_HOME/wordle/stats` (default
-  `~/.local/share/wordle/stats`). For a clean slate, remove that file or run
-  with `XDG_DATA_HOME` pointing at a scratch directory, e.g.
-  `XDG_DATA_HOME=/tmp/wordle-smoke cargo run`.
+- Stats persist in the SQLite database `$XDG_DATA_HOME/wordle/stats.db`
+  (default `~/.local/share/wordle/stats.db`). For a clean slate, remove that
+  database (and its `-wal`/`-shm` files) or run with `XDG_DATA_HOME` pointing
+  at a scratch directory, e.g. `XDG_DATA_HOME=/tmp/wordle-smoke cargo run`.
 
 ## 1. Fresh run
 
@@ -204,15 +204,16 @@ screen has room for it. The board and its components stay centered.
 
 ## 14. Stats
 
-1. Start from a clean stats file (see Preconditions). Open the menu, press
+1. Start from a clean stats database (see Preconditions). Open the menu, press
    Down once: expect the `Stats` entry highlighted, between Start game and
    Credits. Press Enter: expect a `STATS` screen reading
    `No games played yet: finish one to fill this in.` and the hint
    `Esc: back · q quit`. Press Esc: expect the menu.
 2. Start a 3-letter game and submit six distinct valid guesses from
    `assets/allowed-3.txt` (e.g. `aaa`, `aab`, `aac`, `aad`, `aae`, `aaf`).
-   Finish on a win or a loss. Expect the stats file to exist and hold the
-   header `wordle-stats v1` plus one `record` line ending in the answer.
+   Finish on a win or a loss. Expect `stats.db` (plus `stats.db-wal`/`-shm`) to
+   exist, its `games` table to gain exactly one row for the game, and
+   `meta.schema_version` to read `1`.
 3. Press Esc, Down, Enter: expect `Played 1 · Won <0|1> · Lost <1|0> · Win rate
    <0%|100%>`, `Streak`/`Best` values matching the outcome, a `By word size`
    line reading `3 letters · 1 played · …`, and one `Recent games` line. A loss
@@ -223,9 +224,11 @@ screen has room for it. The board and its components stay centered.
    history survives a relaunch.
 5. Lose another game, then open Stats: expect `Played 2`, `Best` unchanged, and
    `Streak 0`. Win two games in a row: expect `Streak 2`.
-6. Replace the stats file with garbage (`echo garbage >` its path) and restart:
+6. Replace the database with garbage (`echo garbage >` its path) and restart:
    expect the app to open normally and the Stats screen to show the
-   `No games played yet` placeholder instead of crashing.
+   `No games played yet` placeholder instead of crashing; the garbage file must
+   still be unchanged after quitting (the app never overwrites an unusable
+   database).
 7. In an 80×12 terminal, open Stats with a populated history: expect the
    headline and the guess distribution to fit without horizontal clipping, and
    lower sections (`By word size`, `Recent games`) to be dropped whole rather
