@@ -1,6 +1,6 @@
 [package]
 name = "wordle"
-version = "0.1.0"
+version = "2026.11.18"
 edition = "2021"
 
 [dependencies]
