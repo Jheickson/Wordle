@@ -34,6 +34,8 @@ dependency decision was unavoidable.
    transaction and renamed to `stats.imported` so it cannot be imported twice.
    A version this build does not know is refused, and the app falls back to
    in-memory stats instead of writing to or downgrading a newer database.
+   Version 2 adds `games.first_guess` through `ALTER TABLE`; pre-existing rows
+   keep a `NULL` opening word and are excluded from opening-word aggregates.
 5. **Failure degrades, never crashes.** Unopenable (corrupt, unwritable, newer)
    databases produce `StoreError`; `App::new` converts that to in-memory stats.
    A failed insert during a session keeps the record in memory and loses it at

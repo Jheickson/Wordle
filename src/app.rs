@@ -103,6 +103,8 @@ pub struct App {
     stats: Stats,
     /// When the current game started, for its recorded duration.
     game_started: SystemTime,
+    /// First guess submitted in the current game, for the opening-word stat.
+    first_guess: Option<String>,
 }
 
 impl App {
@@ -138,6 +140,7 @@ impl App {
             max_rounds: DEFAULT_ROUNDS,
             stats: Stats::default(),
             game_started: SystemTime::now(),
+            first_guess: None,
         }
     }
 
@@ -156,6 +159,7 @@ impl App {
         self.typed.clear();
         self.message = None;
         self.game_started = SystemTime::now();
+        self.first_guess = None;
     }
 
     /// Every completed game and its aggregates.
@@ -342,6 +346,9 @@ impl App {
 
         match result {
             Ok(()) => {
+                if self.first_guess.is_none() {
+                    self.first_guess = Some(word.clone());
+                }
                 self.message = match self.game.state() {
                     GameState::Playing => None,
                     GameState::Won => {
@@ -391,6 +398,7 @@ impl App {
             won,
             duration_secs,
             answer: self.game.answer().as_str().to_owned(),
+            first_guess: self.first_guess.clone(),
         });
     }
 }
@@ -832,6 +840,40 @@ mod tests {
         assert_eq!(app.game().state(), GameState::Lost);
         assert_eq!(app.stats().games_played(), 1);
         assert!(!app.stats().recent(1).next().unwrap().won);
+    }
+
+    #[test]
+    fn a_game_records_the_first_guess_as_its_opening_word() {
+        let mut app = app_with("crane");
+
+        type_word(&mut app, "slate");
+        app.submit();
+        type_word(&mut app, "crane");
+        app.submit();
+
+        let record = app.stats().recent(1).next().unwrap();
+        assert_eq!(record.first_guess.as_deref(), Some("slate"));
+    }
+
+    #[test]
+    fn every_game_records_its_own_opening_word() {
+        let mut app = app_with("crane");
+        type_word(&mut app, "slate");
+        app.submit();
+        type_word(&mut app, "crane");
+        app.submit();
+
+        app.new_game();
+        let answer = app.game().answer().as_str().to_owned();
+        type_word(&mut app, &answer);
+        app.submit();
+
+        let openings: Vec<Option<&str>> = app
+            .stats()
+            .recent(2)
+            .map(|record| record.first_guess.as_deref())
+            .collect();
+        assert_eq!(openings, vec![Some(answer.as_str()), Some("slate")]);
     }
 
     #[test]

@@ -213,7 +213,7 @@ screen has room for it. The board and its components stay centered.
    `assets/allowed-3.txt` (e.g. `aaa`, `aab`, `aac`, `aad`, `aae`, `aaf`).
    Finish on a win or a loss. Expect `stats.db` (plus `stats.db-wal`/`-shm`) to
    exist, its `games` table to gain exactly one row for the game, and
-   `meta.schema_version` to read `1`.
+   `meta.schema_version` to read `2`.
 3. Press Esc, Down, Enter: expect `Played 1 · Won <0|1> · Lost <1|0> · Win rate
    <0%|100%>`, `Streak`/`Best` values matching the outcome, a `By word size`
    line reading `3 letters · 1 played · …`, and one `Recent games` line. A loss
@@ -229,7 +229,13 @@ screen has room for it. The board and its components stay centered.
    `No games played yet` placeholder instead of crashing; the garbage file must
    still be unchanged after quitting (the app never overwrites an unusable
    database).
-7. In an 80×12 terminal, open Stats with a populated history: expect the
+7. Open a fresh 3-letter game, submit `aaa` first, and finish it; then start
+   another game, submit `aaa` first again, and finish it. Open Stats: expect a
+   `Most played opening word AAA (2 games · 100%)` line above `Average
+   guesses`. Repeat a third game opening with `aab` and finish it: expect
+   `AAA (2 games · 67%)`. Games imported from the legacy text file must not
+   count toward that percentage.
+8. In an 80×12 terminal, open Stats with a populated history: expect the
    headline and the guess distribution to fit without horizontal clipping, and
    lower sections (`By word size`, `Recent games`) to be dropped whole rather
    than half-drawn.

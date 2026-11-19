@@ -382,6 +382,14 @@ fn summary_lines(stats: &Stats) -> Vec<Line<'static>> {
             stats.max_streak()
         )),
     ];
+    if let Some((word, count, considered)) = stats.most_played_opening_word() {
+        let games = if count == 1 { "game" } else { "games" };
+        lines.push(Line::from(format!(
+            "Most played opening word {} ({count} {games} · {}%)",
+            word.to_ascii_uppercase(),
+            count * 100 / considered
+        )));
+    }
     if let Some(average) = stats.average_win_guesses() {
         let mut line = format!("Average guesses {average:.1}");
         if let Some(fewest) = stats.fewest_guesses_win() {
@@ -735,6 +743,7 @@ mod tests {
             won,
             duration_secs: 30,
             answer: "a".repeat(word_size),
+            first_guess: None,
         }
     }
 
@@ -771,6 +780,23 @@ mod tests {
         let rendered = text(&stats_lines(&stats, 40));
         assert!(rendered.contains("Guess distribution (wins)"), "{rendered}");
         assert!(rendered.contains('█'), "{rendered}");
+    }
+
+    #[test]
+    fn the_most_played_opening_word_is_listed() {
+        let mut stats = Stats::default();
+        for _ in 0..2 {
+            stats.push(GameRecord {
+                first_guess: Some("slate".to_owned()),
+                ..record(true, 3, 5)
+            });
+        }
+
+        let rendered = text(&stats_lines(&stats, 40));
+        assert!(
+            rendered.contains("Most played opening word SLATE (2 games · 100%)"),
+            "{rendered}"
+        );
     }
 
     #[test]

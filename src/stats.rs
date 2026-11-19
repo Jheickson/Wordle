@@ -18,8 +18,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::game::{MAX_ROUNDS, MAX_WORD_LEN, MIN_ROUNDS, MIN_WORD_LEN};
 
-/// Schema version this build expects in the `meta` table.
-const SCHEMA_VERSION: i64 = 1;
+/// Schema version this build expects in the `meta` table. Version 2 added
+/// `games.first_guess`.
+const SCHEMA_VERSION: i64 = 2;
 
 /// File name of the pre-SQLite stats file, next to the database.
 const LEGACY_FILE_NAME: &str = "stats";
@@ -44,7 +45,8 @@ CREATE TABLE IF NOT EXISTS games (
     rounds_played INTEGER NOT NULL,
     won INTEGER NOT NULL,
     duration_secs INTEGER NOT NULL,
-    answer TEXT NOT NULL
+    answer TEXT NOT NULL,
+    first_guess TEXT
 );
 CREATE INDEX IF NOT EXISTS games_won ON games(won);
 ";
@@ -103,6 +105,9 @@ pub struct GameRecord {
     pub duration_secs: u64,
     /// The answer, lowercase.
     pub answer: String,
+    /// The first guess submitted, lowercase; `None` for games recorded before
+    /// the column existed or imported from the legacy text file.
+    pub first_guess: Option<String>,
 }
 
 impl GameRecord {
@@ -235,6 +240,29 @@ impl Stats {
             .min_by_key(|r| r.duration_secs)
     }
 
+    /// The most used opening word as `(word, games opened with it, games with
+    /// a recorded opening word)`. Ties break alphabetically.
+    ///
+    /// Games recorded before opening words were tracked (and games imported
+    /// from the legacy text file) have no opening word and are excluded.
+    pub fn most_played_opening_word(&self) -> Option<(&str, usize, usize)> {
+        let mut counts: std::collections::BTreeMap<&str, usize> =
+            std::collections::BTreeMap::new();
+        for word in self.records.iter().filter_map(|r| r.first_guess.as_deref()) {
+            *counts.entry(word).or_insert(0) += 1;
+        }
+        let considered: usize = counts.values().sum();
+        // BTreeMap iterates alphabetically, and `>` keeps the first maximum,
+        // so ties resolve to the alphabetically smallest word.
+        let mut best: Option<(&str, usize)> = None;
+        for (word, count) in counts {
+            if best.is_none_or(|(_, best_count)| count > best_count) {
+                best = Some((word, count));
+            }
+        }
+        best.map(|(word, count)| (word, count, considered))
+    }
+
     /// `(word size, played, won)` for every word size that has at least one
     /// game, in word-size order.
     pub fn by_word_size(&self) -> Vec<(usize, usize, usize)> {
@@ -292,28 +320,43 @@ impl Store {
                 row.get(0)
             })
             .optional()?;
-        match version {
-            None => {
-                import_legacy(conn, path)?;
-                conn.execute(
-                    "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
-                    params![SCHEMA_VERSION.to_string()],
-                )?;
-                Ok(())
+        let Some(version) = version else {
+            import_legacy(conn, path)?;
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
+                params![SCHEMA_VERSION.to_string()],
+            )?;
+            return Ok(());
+        };
+
+        let mut version = version
+            .parse::<i64>()
+            .map_err(|_| StoreError::UnsupportedSchema(version.clone()))?;
+        while version < SCHEMA_VERSION {
+            match version {
+                // Version 2 added the opening word.
+                1 => conn.execute_batch("ALTER TABLE games ADD COLUMN first_guess TEXT")?,
+                _ => return Err(StoreError::UnsupportedSchema(version.to_string())),
             }
-            Some(version) => match version.parse::<i64>() {
-                Ok(found) if found == SCHEMA_VERSION => Ok(()),
-                _ => Err(StoreError::UnsupportedSchema(version)),
-            },
+            version += 1;
+            conn.execute(
+                "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
+                params![version.to_string()],
+            )?;
         }
+        if version != SCHEMA_VERSION {
+            return Err(StoreError::UnsupportedSchema(version.to_string()));
+        }
+        Ok(())
     }
 
     /// Appends one game.
     fn insert(&self, record: &GameRecord) -> rusqlite::Result<()> {
         self.conn.execute(
             "INSERT INTO games
-                (ended_at, word_size, round_limit, rounds_played, won, duration_secs, answer)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                (ended_at, word_size, round_limit, rounds_played, won, duration_secs,
+                 answer, first_guess)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 record.timestamp as i64,
                 record.word_size as i64,
@@ -321,7 +364,8 @@ impl Store {
                 record.rounds_played as i64,
                 record.won as i64,
                 record.duration_secs as i64,
-                record.answer
+                record.answer,
+                record.first_guess
             ],
         )?;
         Ok(())
@@ -331,7 +375,7 @@ impl Store {
     fn load(&self) -> rusqlite::Result<Vec<GameRecord>> {
         let mut statement = self.conn.prepare(
             "SELECT ended_at, word_size, round_limit, rounds_played, won,
-                    duration_secs, answer
+                    duration_secs, answer, first_guess
              FROM games ORDER BY id",
         )?;
         let records = statement.query_map([], |row| {
@@ -343,6 +387,7 @@ impl Store {
                 won: row.get::<_, i64>(4)? != 0,
                 duration_secs: row.get::<_, i64>(5)? as u64,
                 answer: row.get(6)?,
+                first_guess: row.get(7)?,
             })
         })?;
         records.collect()
@@ -367,8 +412,9 @@ fn import_legacy(conn: &Connection, db_path: &Path) -> Result<(), StoreError> {
     for record in records {
         transaction.execute(
             "INSERT INTO games
-                (ended_at, word_size, round_limit, rounds_played, won, duration_secs, answer)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                (ended_at, word_size, round_limit, rounds_played, won, duration_secs,
+                 answer, first_guess)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 record.timestamp as i64,
                 record.word_size as i64,
@@ -376,7 +422,8 @@ fn import_legacy(conn: &Connection, db_path: &Path) -> Result<(), StoreError> {
                 record.rounds_played as i64,
                 record.won as i64,
                 record.duration_secs as i64,
-                record.answer
+                record.answer,
+                record.first_guess
             ],
         )?;
     }
@@ -414,6 +461,7 @@ fn parse_legacy_record(line: &str) -> Option<GameRecord> {
         },
         duration_secs: fields.next()?.parse().ok()?,
         answer: fields.next()?.to_owned(),
+        first_guess: None,
     };
     if fields.next().is_some() || !record.is_valid() {
         return None;
@@ -482,6 +530,7 @@ mod tests {
             won,
             duration_secs: 60,
             answer: "a".repeat(word_size),
+            first_guess: None,
         }
     }
 
@@ -589,6 +638,7 @@ mod tests {
             won: true,
             duration_secs: 10,
             answer: "crane".to_owned(),
+            first_guess: None,
         });
 
         let [_, two, _, four, ..] = stats.win_distribution();
@@ -620,6 +670,72 @@ mod tests {
 
         let recent: Vec<u64> = stats.recent(RECENT_LIMIT).map(|r| r.timestamp).collect();
         assert_eq!(recent, vec![6, 5, 4, 3, 2]);
+    }
+
+    #[test]
+    fn a_version_one_database_is_upgraded_in_place() {
+        let path = scratch_db("upgrade");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE games (
+                 id INTEGER PRIMARY KEY, ended_at INTEGER NOT NULL,
+                 word_size INTEGER NOT NULL, round_limit INTEGER NOT NULL,
+                 rounds_played INTEGER NOT NULL, won INTEGER NOT NULL,
+                 duration_secs INTEGER NOT NULL, answer TEXT NOT NULL
+             );
+             INSERT INTO meta VALUES ('schema_version', '1');
+             INSERT INTO games
+                 (ended_at, word_size, round_limit, rounds_played, won,
+                  duration_secs, answer)
+             VALUES (1, 5, 6, 3, 1, 20, 'crane');",
+        )
+        .unwrap();
+        drop(conn);
+
+        let stats = Stats::open(&path).unwrap();
+        assert_eq!(stats.games_played(), 1, "the stored game survives");
+        assert_eq!(stats.recent(1).next().unwrap().first_guess, None);
+        assert_eq!(stats.most_played_opening_word(), None);
+        drop(stats);
+
+        let conn = Connection::open(&path).unwrap();
+        let version: String = conn
+            .query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, "2");
+        let opening: Option<String> = conn
+            .query_row("SELECT first_guess FROM games", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(opening, None, "old rows gain a null opening word");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn the_most_played_opening_word_counts_only_games_that_recorded_one() {
+        let mut stats = Stats::default();
+        for (first_guess, won) in [("slate", true), ("slate", false), ("crane", true)] {
+            stats.push(GameRecord {
+                first_guess: Some(first_guess.to_owned()),
+                ..record(won, 3, 5)
+            });
+        }
+        stats.push(record(true, 3, 5)); // no opening word: not counted
+
+        assert_eq!(stats.most_played_opening_word(), Some(("slate", 2, 3)));
+    }
+
+    #[test]
+    fn opening_word_ties_break_alphabetically() {
+        let mut stats = Stats::default();
+        for first_guess in ["zebra", "crane"] {
+            stats.push(GameRecord {
+                first_guess: Some(first_guess.to_owned()),
+                ..record(true, 3, 5)
+            });
+        }
+
+        assert_eq!(stats.most_played_opening_word(), Some(("crane", 1, 2)));
     }
 
     #[test]
